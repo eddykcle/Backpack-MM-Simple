@@ -16,6 +16,50 @@ from utils.helpers import round_to_precision, round_to_tick_size
 logger = setup_logger("perp_grid_strategy")
 
 
+def format_decimal_string(value: float, precision: int) -> str:
+    """
+    將數字格式化為字符串，避免科學記號，適用於 Backpack API 的 string_decimal 類型
+    
+    Args:
+        value: 要格式化的數值
+        precision: 小數位精度
+        
+    Returns:
+        格式化後的字符串
+    """
+    if value == 0:
+        return "0"
+    
+    # 使用 Decimal 來避免科學記號和精度問題
+    from decimal import Decimal, ROUND_DOWN
+    
+    try:
+        # 將浮點數轉換為 Decimal，然後格式化
+        decimal_value = Decimal(str(value))
+        # 使用 ROUND_DOWN 確保不會超出精度
+        decimal_value = decimal_value.quantize(Decimal(10) ** -precision, rounding=ROUND_DOWN)
+        
+        # 格式化為字符串，不使用科學記號
+        formatted = f"{decimal_value:.{precision}f}"
+        # 移除尾部的零和小數點
+        formatted = formatted.rstrip('0').rstrip('.')
+        
+        # 如果結果是整數，確保返回整數格式
+        if '.' not in formatted:
+            return formatted
+        
+        return formatted
+    except Exception:
+        # 如果 Decimal 轉換失敗，回退到原始方法
+        formatted = f"{value:.{precision}f}"
+        # 確保不使用科學記號
+        if 'e' in formatted.lower():
+            # 如果仍然出現科學記號，使用 format 強制不使用科學記號
+            formatted = format(value, f'.{precision}f')
+        formatted = formatted.rstrip('0').rstrip('.')
+        return formatted if formatted else "0"
+
+
 class PerpGridStrategy(PerpetualMarketMaker):
     """永續合約網格交易策略
 
@@ -215,9 +259,53 @@ class PerpGridStrategy(PerpetualMarketMaker):
 
         # 計算每格訂單數量
         if not self.order_quantity:
-            # 使用最小訂單量
-            self.order_quantity = self.min_order_size
-            logger.info("使用最小訂單量: %.4f %s", self.order_quantity, self.base_asset)
+            # 根據最大持倉量和網格類型智能計算訂單數量
+            # 首先計算會下單的網格數量
+            orders_count = 0
+            for price in self.grid_levels:
+                # 跳過太接近當前價格的網格點位
+                if abs(price - current_price) / current_price < 0.001:
+                    continue
+                
+                # 根據網格類型判斷是否會下單
+                should_place_order = False
+                if self.grid_type == "neutral":
+                    # 中性網格：下方掛多單，上方掛空單
+                    should_place_order = True
+                elif self.grid_type == "long":
+                    # 做多網格：只在下方掛多單
+                    should_place_order = (price <= current_price)
+                elif self.grid_type == "short":
+                    # 做空網格：只在上方掛空單
+                    should_place_order = (price >= current_price)
+                
+                if should_place_order:
+                    orders_count += 1
+            
+            if orders_count > 0:
+                # 根據最大持倉量分配：每個訂單分配 max_position / orders_count
+                # 使用 0.8 倍作為安全係數，因為不是所有訂單都會同時成交
+                base_quantity_per_order = (self.max_position / orders_count) * 0.8
+                self.order_quantity = round_to_precision(base_quantity_per_order, self.base_precision)
+                
+                # 確保不小於最小訂單量
+                if self.order_quantity < self.min_order_size:
+                    self.order_quantity = self.min_order_size
+                    logger.warning(
+                        "計算的訂單數量 (%.8f %s) 低於最小訂單量，使用最小訂單量: %.8f %s",
+                        base_quantity_per_order, self.base_asset,
+                        self.order_quantity, self.base_asset
+                    )
+                else:
+                    logger.info(
+                        "根據最大持倉量自動計算訂單數量: %.8f %s/單 (最大持倉: %.4f %s, 預期訂單數: %d)",
+                        self.order_quantity, self.base_asset,
+                        self.max_position, self.base_asset, orders_count
+                    )
+            else:
+                # 沒有有效的網格點位，使用最小訂單量
+                self.order_quantity = self.min_order_size
+                logger.warning("沒有有效的網格點位，使用最小訂單量: %.8f %s", self.order_quantity, self.base_asset)
 
         # 批量構建網格訂單
         orders_to_place = []
@@ -231,10 +319,12 @@ class PerpGridStrategy(PerpetualMarketMaker):
                 # 中性網格：在當前價格下方掛開多單，上方掛開空單
                 if price < current_price:
                     # 開多單（買入）
+                    formatted_price = round_to_tick_size(price, self.tick_size)
+                    formatted_quantity = round_to_precision(self.order_quantity, self.base_precision)
                     orders_to_place.append({
                         "orderType": "Limit",
-                        "price": str(price),
-                        "quantity": str(self.order_quantity),
+                        "price": format_decimal_string(formatted_price, self.quote_precision),
+                        "quantity": format_decimal_string(formatted_quantity, self.base_precision),
                         "side": "Bid",
                         "symbol": self.symbol,
                         "timeInForce": "GTC",
@@ -242,10 +332,12 @@ class PerpGridStrategy(PerpetualMarketMaker):
                     })
                 elif price > current_price:
                     # 開空單（賣出）
+                    formatted_price = round_to_tick_size(price, self.tick_size)
+                    formatted_quantity = round_to_precision(self.order_quantity, self.base_precision)
                     orders_to_place.append({
                         "orderType": "Limit",
-                        "price": str(price),
-                        "quantity": str(self.order_quantity),
+                        "price": format_decimal_string(formatted_price, self.quote_precision),
+                        "quantity": format_decimal_string(formatted_quantity, self.base_precision),
                         "side": "Ask",
                         "symbol": self.symbol,
                         "timeInForce": "GTC",
@@ -255,10 +347,12 @@ class PerpGridStrategy(PerpetualMarketMaker):
             elif self.grid_type == "long":
                 # 做多網格：只在下方掛開多單
                 if price <= current_price:
+                    formatted_price = round_to_tick_size(price, self.tick_size)
+                    formatted_quantity = round_to_precision(self.order_quantity, self.base_precision)
                     orders_to_place.append({
                         "orderType": "Limit",
-                        "price": str(price),
-                        "quantity": str(self.order_quantity),
+                        "price": format_decimal_string(formatted_price, self.quote_precision),
+                        "quantity": format_decimal_string(formatted_quantity, self.base_precision),
                         "side": "Bid",
                         "symbol": self.symbol,
                         "timeInForce": "GTC",
@@ -268,10 +362,12 @@ class PerpGridStrategy(PerpetualMarketMaker):
             elif self.grid_type == "short":
                 # 做空網格：只在上方掛開空單
                 if price >= current_price:
+                    formatted_price = round_to_tick_size(price, self.tick_size)
+                    formatted_quantity = round_to_precision(self.order_quantity, self.base_precision)
                     orders_to_place.append({
                         "orderType": "Limit",
-                        "price": str(price),
-                        "quantity": str(self.order_quantity),
+                        "price": format_decimal_string(formatted_price, self.quote_precision),
+                        "quantity": format_decimal_string(formatted_quantity, self.base_precision),
                         "side": "Ask",
                         "symbol": self.symbol,
                         "timeInForce": "GTC",

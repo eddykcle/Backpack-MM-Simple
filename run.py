@@ -83,6 +83,31 @@ def validate_rebalance_args(args):
             logger.error("重平觸發閾值必須大於 0")
             sys.exit(1)
 
+def start_web_server_in_background():
+    """在後台啟動Web服務器"""
+    try:
+        from web.server import run_server
+        import threading
+        
+        # 在後台線程中啟動Web服務器
+        web_thread = threading.Thread(target=run_server, kwargs={
+            'host': '0.0.0.0',
+            'port': 5000,
+            'debug': False
+        }, daemon=True)
+        web_thread.start()
+        
+        logger.info("Web服務器已在後台啟動，可通過 http://localhost:5000 訪問")
+        logger.info("健康檢查端點: http://localhost:5000/health")
+        logger.info("詳細狀態端點: http://localhost:5000/health/detailed")
+        
+        # 等待一下讓服務器有時間啟動
+        time.sleep(2)
+        
+    except Exception as e:
+        logger.warning(f"啟動Web服務器失敗: {e}")
+        logger.info("策略將繼續運行，但Web界面不可用")
+
 def main():
     """主函數"""
     args = parse_arguments()
@@ -199,6 +224,10 @@ def main():
             sys.exit(1)
     elif args.symbol and (args.spread is not None or args.strategy in ['grid', 'perp_grid']):
         # 如果指定了交易對，直接運行策略（做市或網格）
+        
+        # 在後台啟動Web服務器，提供健康檢查和監控界面
+        start_web_server_in_background()
+        
         try:
             from strategies.market_maker import MarketMaker
             from strategies.maker_taker_hedge import MakerTakerHedgeStrategy

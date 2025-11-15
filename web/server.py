@@ -436,9 +436,9 @@ def stop_bot():
 def get_config():
     """獲取配置信息"""
     return jsonify({
-        'exchanges': ['backpack', 'aster', 'paradex'],
+        'exchanges': ['backpack', 'aster', 'paradex', 'lighter'],
         'market_types': ['spot', 'perp'],
-        'strategies': ['standard', 'maker_hedge', 'grid'],
+        'strategies': ['standard', 'maker_hedge', 'grid', 'perp_grid'],
         'env_configured': {
             'backpack': bool(os.getenv('BACKPACK_KEY') and os.getenv('BACKPACK_SECRET')),
             'aster': bool(os.getenv('ASTER_API_KEY') and os.getenv('ASTER_SECRET_KEY')),
@@ -446,6 +446,53 @@ def get_config():
             'lighter': bool(os.getenv('LIGHTER_PRIVATE_KEY') and os.getenv('LIGHTER_PUBLIC_KEY'))
         }
     })
+
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    """健康檢查端點 - 供 Uptime Kuma 使用"""
+    try:
+        # 簡單的健康檢查：如果策略在運行就返回200，否則返回503
+        if bot_status['running']:
+            return jsonify({
+                'status': 'healthy',
+                'running': True,
+                'timestamp': datetime.now().isoformat()
+            }), 200
+        else:
+            return jsonify({
+                'status': 'unhealthy',
+                'running': False,
+                'timestamp': datetime.now().isoformat()
+            }), 503
+        
+    except Exception as e:
+        logger.error(f"健康檢查錯誤: {e}")
+        # 任何錯誤都返回503，讓Uptime Kuma知道服務有問題
+        return jsonify({
+            'status': 'error',
+            'error': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 503
+
+
+@app.route('/health/detailed', methods=['GET'])
+def detailed_health_check():
+    """詳細健康檢查端點"""
+    try:
+        detailed_status = {
+            'service': 'trading-bot',
+            'status': 'running' if bot_status['running'] else 'stopped',
+            'bot_status': bot_status,
+            'server_time': datetime.now().isoformat(),
+            'uptime': time.time() if hasattr(time, 'time') else None
+        }
+        
+        return jsonify(detailed_status), 200
+        
+    except Exception as e:
+        logger.error(f"詳細健康檢查錯誤: {e}")
+        return jsonify({'error': str(e)}), 500
 
 
 @socketio.on('connect')
