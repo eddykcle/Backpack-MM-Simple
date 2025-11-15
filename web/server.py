@@ -16,7 +16,7 @@ from datetime import datetime
 # 添加父目錄到路徑以導入項目模組
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from logger import setup_logger
+from core.logger import setup_logger
 
 logger = setup_logger("web_server")
 

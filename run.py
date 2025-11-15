@@ -9,7 +9,7 @@ import os
 import time
 from typing import Optional
 from config import ENABLE_DATABASE
-from logger import setup_logger
+from core.logger import setup_logger
 
 # 創建記錄器
 logger = setup_logger("main")

@@ -19,7 +19,7 @@ from strategies.perp_grid_strategy import PerpGridStrategy
 from utils.helpers import calculate_volatility
 from database.db import Database
 from config import API_KEY, SECRET_KEY, ENABLE_DATABASE
-from logger import setup_logger
+from core.logger import setup_logger
 
 logger = setup_logger("cli")
 

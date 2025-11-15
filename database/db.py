@@ -5,7 +5,7 @@ import sqlite3
 from datetime import datetime
 from typing import Dict, List, Tuple, Any, Optional
 from config import DB_PATH
-from logger import setup_logger
+from core.logger import setup_logger
 
 logger = setup_logger("database")
 

@@ -11,7 +11,7 @@ from config import WS_URL, DEFAULT_WINDOW
 from api.auth import create_signature
 from api.bp_client import BPClient
 from utils.helpers import calculate_volatility
-from logger import setup_logger
+from core.logger import setup_logger
 from urllib.parse import urlparse
 
 logger = setup_logger("backpack_ws")
