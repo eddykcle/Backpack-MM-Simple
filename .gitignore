@@ -4,6 +4,11 @@ __pycache__/
 .env
 *.db
 .claude/settings.local.json
+# Virtual environment
+.venv/
+venv/
+env/
+ENV/
 .venv/bin/activate
 .venv/bin/activate.csh
 .venv/bin/activate.fish
