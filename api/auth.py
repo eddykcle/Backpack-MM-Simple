@@ -5,7 +5,7 @@ import base64
 import nacl.signing
 import sys
 from typing import Optional
-from logger import setup_logger
+from core.logger import setup_logger
 
 logger = setup_logger("api.auth")
 

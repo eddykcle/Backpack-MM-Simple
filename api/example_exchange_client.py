@@ -14,7 +14,7 @@ from .base_client import (
     OrderInfo, TickerInfo, MarketInfo, OrderBookInfo, OrderBookLevel,
     KlineInfo, TradeInfo, PositionInfo
 )
-from logger import setup_logger
+from core.logger import setup_logger
 
 logger = setup_logger("example_exchange")
 

@@ -13,7 +13,7 @@ from urllib.parse import urlencode
 import requests
 
 from .base_client import BaseExchangeClient
-from logger import setup_logger
+from core.logger import setup_logger
 
 logger = setup_logger("api.aster_client")
 

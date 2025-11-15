@@ -15,7 +15,7 @@ from api.lighter_client import LighterClient
 from ws_client.client import BackpackWebSocket
 from database.db import Database
 from utils.helpers import round_to_precision, round_to_tick_size, calculate_volatility
-from logger import setup_logger
+from core.logger import setup_logger
 import traceback
 
 logger = setup_logger("market_maker")

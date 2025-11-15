@@ -27,7 +27,7 @@ from .base_client import (
     OrderBookLevel,
     TradeInfo
 )
-from logger import setup_logger
+from core.logger import setup_logger
 
 logger = setup_logger("api.paradex_client")
 

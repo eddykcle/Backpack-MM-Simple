@@ -7,7 +7,7 @@ import requests
 from typing import Dict, Any, Iterable, List, Optional, Tuple
 from .auth import create_signature
 from config import API_URL, API_VERSION, DEFAULT_WINDOW
-from logger import setup_logger
+from core.logger import setup_logger
 from .base_client import BaseExchangeClient
 
 logger = setup_logger("api.client")

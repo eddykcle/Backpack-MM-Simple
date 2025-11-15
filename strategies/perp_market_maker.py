@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Any
 
 # 全局函數導入已移除，現在使用客户端方法
-from logger import setup_logger
+from core.logger import setup_logger
 from strategies.market_maker import MarketMaker, format_balance
 from utils.helpers import round_to_precision, round_to_tick_size
 

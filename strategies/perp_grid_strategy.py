@@ -9,7 +9,7 @@ import time
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Any
 
-from logger import setup_logger
+from core.logger import setup_logger
 from strategies.perp_market_maker import PerpetualMarketMaker, format_balance
 from utils.helpers import round_to_precision, round_to_tick_size
 

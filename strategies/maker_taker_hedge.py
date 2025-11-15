@@ -4,7 +4,7 @@ from __future__ import annotations
 import time
 from typing import Any, Dict, Optional, Tuple
 
-from logger import setup_logger
+from core.logger import setup_logger
 from strategies.market_maker import MarketMaker, format_balance
 from strategies.perp_market_maker import PerpetualMarketMaker
 from utils.helpers import round_to_precision, round_to_tick_size

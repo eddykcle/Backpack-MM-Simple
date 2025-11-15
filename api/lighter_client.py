@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 import requests
 
 from .base_client import BaseExchangeClient
-from logger import setup_logger
+from core.logger import setup_logger
 
 logger = setup_logger("api.lighter_client")
 
