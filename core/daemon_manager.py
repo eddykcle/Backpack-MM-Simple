@@ -408,15 +408,30 @@ class TradingBotDaemon:
             env = os.environ.copy()
             env.update(self.config.get("environment", {}))
             
-            # 啟動進程
+            # 準備輸出重定向文件（避免使用PIPE導致阻塞）
+            # 子進程的stdout/stderr重定向到日誌文件，避免SSH斷開時管道阻塞
+            stdout_log = self.log_dir / "bot_stdout.log"
+            stderr_log = self.log_dir / "bot_stderr.log"
+            
+            # 以追加模式打開日誌文件，確保SSH斷開後仍能正常寫入
+            stdout_file = open(stdout_log, 'a', buffering=1)  # 行緩衝
+            stderr_file = open(stderr_log, 'a', buffering=1)  # 行緩衝
+            
+            # 啟動進程，重定向到文件而不是PIPE
             process = subprocess.Popen(
                 cmd,
                 cwd=self.config["working_dir"],
                 env=env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
+                stdout=stdout_file,
+                stderr=stderr_file,
+                text=True,
+                # 確保進程獨立於父進程，SSH斷開不會影響
+                start_new_session=True
             )
+            
+            # 關閉文件描述符（子進程已經繼承了副本）
+            stdout_file.close()
+            stderr_file.close()
             
             # 保存進程引用（防止資源泄漏）
             self._bot_process = process
@@ -434,7 +449,9 @@ class TradingBotDaemon:
             
             self.logger.info("交易機器人進程已啟動", 
                             pid=process.pid, 
-                            cmd=" ".join(cmd))
+                            cmd=" ".join(cmd),
+                            stdout_log=str(stdout_log),
+                            stderr_log=str(stderr_log))
             
             # 等待一下讓進程啟動
             time.sleep(5)
@@ -443,12 +460,20 @@ class TradingBotDaemon:
             if process.poll() is None:
                 return True
             else:
-                # 進程已經退出，獲取錯誤信息
-                stdout, stderr = process.communicate()
+                # 進程已經退出，讀取錯誤日誌
+                try:
+                    with open(stderr_log, 'r') as f:
+                        stderr_content = f.read()
+                    with open(stdout_log, 'r') as f:
+                        stdout_content = f.read()
+                except Exception:
+                    stderr_content = "無法讀取錯誤日誌"
+                    stdout_content = "無法讀取輸出日誌"
+                
                 self.logger.error("交易機器人啟動失敗", 
                                 return_code=process.returncode,
-                                stdout=stdout,
-                                stderr=stderr)
+                                stdout=stdout_content[-1000:] if stdout_content else "",  # 只顯示最後1000字符
+                                stderr=stderr_content[-1000:] if stderr_content else "")  # 只顯示最後1000字符
                 # 清理引用
                 self._bot_process = None
                 self._remove_bot_pid_file()

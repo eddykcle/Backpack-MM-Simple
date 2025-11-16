@@ -448,12 +448,41 @@ def get_config():
     })
 
 
+def _check_strategy_process() -> bool:
+    """檢查是否有策略進程在運行（通過命令行啟動的）"""
+    try:
+        import psutil
+        # 查找運行run.py的進程，但不包括daemon管理器本身
+        for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+            try:
+                cmdline = proc.info.get('cmdline', [])
+                if cmdline and any('run.py' in arg for arg in cmdline):
+                    # 檢查是否是策略進程（有 --symbol 參數表示是策略，而不是daemon）
+                    if any('--symbol' in arg for arg in cmdline):
+                        # 排除daemon管理器進程
+                        if not any('daemon_manager.py' in arg for arg in cmdline):
+                            return True
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        return False
+    except ImportError:
+        # 如果沒有psutil，無法檢測進程，返回False
+        return False
+    except Exception as e:
+        logger.error(f"檢查策略進程失敗: {e}")
+        return False
+
+
 @app.route('/health', methods=['GET'])
 def health_check():
     """健康檢查端點 - 供 Uptime Kuma 使用"""
     try:
-        # 簡單的健康檢查：如果策略在運行就返回200，否則返回503
-        if bot_status['running']:
+        # 檢查策略是否在運行：
+        # 1. 首先檢查Web界面啟動的策略（bot_status['running']）
+        # 2. 如果沒有，再檢查命令行啟動的策略進程
+        is_running = bot_status['running'] or _check_strategy_process()
+        
+        if is_running:
             return jsonify({
                 'status': 'healthy',
                 'running': True,

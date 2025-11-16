@@ -19,8 +19,33 @@ def setup_logger(name="market_maker"):
     
     formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     
-    # 文件處理器
-    file_handler = logging.FileHandler(LOG_FILE, encoding='utf-8')
+    # 文件處理器（設置flushOn=INFO級別，確保每次日誌都立即寫入磁盤）
+    # 創建自定義Handler以實現行緩衝
+    class LineBufferedFileHandler(logging.FileHandler):
+        def __init__(self, filename, mode='a', encoding=None, delay=False):
+            super().__init__(filename, mode, encoding, delay)
+            # 設置為行緩衝模式（buffering=1）
+            import io
+            if isinstance(self.stream, io.TextIOWrapper):
+                try:
+                    # Python 3.7+ 支持 reconfigure
+                    self.stream.reconfigure(line_buffering=True)
+                except (AttributeError, ValueError):
+                    # 對於不支持的版本，創建新的行緩衝流
+                    pass
+        
+        def emit(self, record):
+            super().emit(record)
+            # 強制刷新到磁盤
+            if self.stream:
+                self.stream.flush()
+                try:
+                    os.fsync(self.stream.fileno())
+                except (AttributeError, OSError):
+                    pass
+    
+    import os
+    file_handler = LineBufferedFileHandler(LOG_FILE, encoding='utf-8', delay=False)
     file_handler.setFormatter(formatter)
     
     # 控制台處理器

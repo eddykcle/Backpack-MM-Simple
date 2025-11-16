@@ -2,18 +2,29 @@
 
 這個目錄包含了系統配置、監控和管理的詳細文檔。
 
+## 📚 完整文檔
+
+**👉 [系統管理完整指南](./README_COMPLETE.md)** - 整合了所有系統管理相關的完整文檔，包含：
+- 系統概述和組件介紹
+- 核心功能詳解（日誌管理、進程守護、監控告警）
+- SSH斷開連接支持技術原理
+- 快速開始指南
+- 高級用法和配置
+- 測試驗證方法
+- 故障排除指南
+- 性能和安全考慮
+
 ## 🖥️ 系統組件
 
 ### 核心管理系統
-- [新的日誌和進程管理系統](./README_NEW_SYSTEM.md) - 完整的系統架構和功能說明
-- [守護進程管理器](./daemon_manager.py) - 進程守護和自動重啟
-- [系統監控](./monitoring.py) - 資源監控和告警系統
-- [日誌管理器](./log_manager.py) - 結構化日誌和日誌輪轉
+- [守護進程管理器](../core/daemon_manager.py) - 進程守護和自動重啟
+- [系統監控](../monitoring/monitoring.py) - 資源監控和告警系統
+- [日誌管理器](../core/log_manager.py) - 結構化日誌和日誌輪轉
 
 ### 配置文件
-- [守護進程配置](./daemon_config.json) - 系統運行參數配置
+- [守護進程配置](../config/daemon_config.json) - 系統運行參數配置
 
-## 🔧 系統功能
+## 🔧 核心功能概覽
 
 ### 1. 高級日誌管理
 - **結構化日誌**: JSON格式，便於程序解析
@@ -24,7 +35,7 @@
 - **自動清理**: 定期清理超過指定天數的舊日誌
 
 ### 2. 進程守護管理
-- **守護進程化**: 自動轉為守護進程
+- **守護進程化**: 自動轉為守護進程，支持SSH斷開後繼續運行
 - **PID管理**: 自動管理PID文件，防止重複啟動
 - **自動重啟**: 進程崩潰時自動重啟，支持重試限制
 - **健康檢查**: 定期檢查進程健康狀態
@@ -47,21 +58,29 @@ pip install psutil requests
 ```
 
 ### 2. 配置系統
-編輯 `daemon_config.json` 文件，設置您的交易參數。
+編輯 `config/daemon_config.json` 文件，設置您的交易參數。
 
 ### 3. 啟動系統
 ```bash
-# 啟動守護進程
-python daemon_manager.py start --daemon
+# 啟動守護進程（推薦使用虛擬環境中的Python）
+.venv/bin/python3 core/daemon_manager.py start --daemon
 
 # 查看狀態
-python daemon_manager.py status
+.venv/bin/python3 core/daemon_manager.py status
+
+# 停止守護進程
+.venv/bin/python3 core/daemon_manager.py stop
+
+# 重啟守護進程
+.venv/bin/python3 core/daemon_manager.py restart
 ```
+
+**注意**：如果已經激活虛擬環境（`source .venv/bin/activate`），也可以直接使用 `python` 或 `python3`。
 
 ### 4. 啟動監控
 ```bash
 # 在另一個終端啟動監控
-python monitoring.py
+python monitoring/monitoring.py
 ```
 
 ## 📊 與傳統方案的對比
@@ -76,29 +95,11 @@ python monitoring.py
 | 告警通知 | 無 | 支持郵件、Telegram、Webhook | 主動通知管理員 |
 | 結構化日誌 | 無 | 支持JSON格式結構化日誌 | 便於程序解析 |
 | 性能監控 | 無 | 歷史性能數據收集和分析 | 優化系統性能 |
-
-## ⚙️ 配置文件結構
-
-```json
-{
-  "python_path": ".venv/bin/python3",
-  "script_path": "run.py",
-  "working_dir": ".",
-  "log_dir": "logs",
-  "max_restart_attempts": 3,
-  "restart_delay": 60,
-  "health_check_interval": 30,
-  "memory_limit_mb": 2048,
-  "cpu_limit_percent": 80,
-  "auto_restart": true,
-  "environment": {},
-  "bot_args": ["--exchange", "backpack", "--symbol", "SOL_USDC"]
-}
-```
+| SSH斷開後運行 | ✅ | ✅ | 兩者都能實現 |
 
 ## 🔗 相關鏈接
 
-- [新手入門指南](../getting-started/) - 基礎知識和配置
+- [系統管理完整指南](./README_COMPLETE.md) - **推薦閱讀** - 完整的系統管理文檔
 - [策略詳細說明](../strategies/) - 深入了解各種交易策略
 - [部署運維指南](../deployment/) - 服務器部署和維護
 
@@ -108,3 +109,5 @@ python monitoring.py
 2. **監控配置** - 配置告警通知以及時發現問題
 3. **資源限制** - 設置合理的內存和CPU限制
 4. **定期維護** - 定期檢查日誌和系統狀態
+
+> 💡 **提示**: 詳細的配置說明、高級用法、故障排除等內容，請參閱 [系統管理完整指南](./README_COMPLETE.md)
