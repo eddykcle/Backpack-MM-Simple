@@ -30,7 +30,7 @@
     "--grid-mode",
     "geometric",
     "--max-position",
-    "0.03",
+    "0.06",
     "--stop-loss",
     "375",
     "--take-profit",

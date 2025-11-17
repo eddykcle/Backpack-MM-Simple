@@ -148,7 +148,19 @@ class PerpGridStrategy(PerpetualMarketMaker):
         self.grid_upper_price = grid_upper_price
         self.grid_lower_price = grid_lower_price
         self.grid_num = max(2, grid_num)
-        self.order_quantity = order_quantity
+
+        sanitized_quantity: Optional[float] = None
+        if order_quantity is not None:
+            try:
+                candidate_qty = float(order_quantity)
+                if candidate_qty > 0:
+                    sanitized_quantity = candidate_qty
+                else:
+                    logger.warning("order_quantity 必須為正數，將改用自動計算 (收到: %s)", order_quantity)
+            except (TypeError, ValueError):
+                logger.warning("order_quantity 參數無法解析為數字，將改用自動計算 (收到: %s)", order_quantity)
+        self.order_quantity = sanitized_quantity
+
         self.auto_price_range = auto_price_range
         self.price_range_percent = price_range_percent
         self.grid_mode = grid_mode
@@ -176,7 +188,8 @@ class PerpGridStrategy(PerpetualMarketMaker):
         
         # 持倉快照（用於檢測倉位變化）
         self.last_position_snapshot: float = 0.0
-        self.position_change_threshold: float = self.order_quantity * 0.5  # 倉位變化閾值
+        self.position_change_threshold: float = 0.0  # 實際值在初始化後設定
+        self._update_position_change_threshold(context="init")
         
         # 舊的數據結構（保留兼容性）
         self.grid_orders_by_price: Dict[float, List[Dict]] = {}
@@ -873,6 +886,9 @@ class PerpGridStrategy(PerpetualMarketMaker):
                 self.order_quantity = self.min_order_size
                 logger.warning("沒有有效的網格點位，使用最小訂單量: %.8f %s", self.order_quantity, self.base_asset)
 
+        # 根據最終訂單量重設倉位變化閾值
+        self._update_position_change_threshold(context="grid_init")
+
         # 批量構建網格訂單
         orders_to_place = []
 
@@ -1026,6 +1042,33 @@ class PerpGridStrategy(PerpetualMarketMaker):
         self.grid_initialized = True
 
         return True
+
+    def _update_position_change_threshold(self, context: str = "init") -> None:
+        """依照目前的訂單量推算倉位變化檢測閾值。"""
+        min_qty = getattr(self, "min_order_size", 0.0) or 0.0
+        effective_qty = self.order_quantity
+
+        if effective_qty is None or effective_qty <= 0:
+            if min_qty > 0:
+                effective_qty = min_qty
+            else:
+                effective_qty = 1e-8  # 避免閾值為0造成頻繁觸發
+
+        new_threshold = max(effective_qty * 0.5, min_qty / 10 if min_qty > 0 else effective_qty * 0.5)
+
+        if (
+            hasattr(self, "position_change_threshold")
+            and math.isclose(self.position_change_threshold, new_threshold, rel_tol=1e-12, abs_tol=1e-12)
+        ):
+            return
+
+        self.position_change_threshold = new_threshold
+        logger.debug(
+            "更新倉位變化閾值(%s): %.8f (訂單量: %.8f)",
+            context,
+            self.position_change_threshold,
+            effective_qty,
+        )
 
     def _record_grid_order(self, order_data: Any, price: float, side: str, quantity: float) -> None:
         """記錄網格訂單信息（使用新的記錄系統）"""

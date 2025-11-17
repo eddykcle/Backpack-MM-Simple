@@ -1,0 +1,7 @@
+- 一開始 `perp_grid` 策略在初始化時就噴 `unsupported operand type(s) for *: 'NoneType' and 'float'`，追到 `PerpGridStrategy.__init__` 會立刻用 `order_quantity * 0.5` 設定 `position_change_threshold`，但 CLI 若沒提供 `--quantity` 就會是 `None`。  
+- 你提供的 `daemon_config.json` 原本帶 `--quantity 0.1`，能避開 TypeError，但單筆下單量遠超 `--max-position 0.03`，在 45 檔短網格下同時掛單時，交易所直接回 `INSUFFICIENT_MARGIN`，日誌留下一堆「無法記錄網格訂單」警告。  
+- 我建議（並修改程式支援）把 `--quantity` 轉為可選：  
+  - 移除或給極小值時，策略會根據 `max_position`、網格數與 `min_order_size` 自動計算單筆下單量，確保同時成交也不超過 `max_position`。  
+  - 新增 `_update_position_change_threshold`，讓倉位變化閾值跟隨訂單量自動設定，即使 `order_quantity` 缺失也不會出錯。  
+  - 建構子會檢查 `order_quantity` 是否為正的數字，否則退回自算並記錄 warning。  
+- 依你 600 USDC、10×槓桿的資金條件，建議配置：`--max-position 0.03`、`--target-position 0`、`--position-threshold 0.005`，並讓策略自算單筆數量（或手動設 ≤0.001 BTC）。這樣既不會觸發初始化錯誤，也不會因資金不足而被拒單。
