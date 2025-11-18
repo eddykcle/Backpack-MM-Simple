@@ -64,7 +64,9 @@ class TradingBotDaemon:
             "memory_limit_mb": 2048,
             "cpu_limit_percent": 80,
             "auto_restart": True,
-            "environment": {}
+            "environment": {},
+            "bot_stop_timeout": 25,
+            "bot_kill_timeout": 5
         }
         
         if self.config_file.exists():
@@ -325,6 +327,9 @@ class TradingBotDaemon:
             stopped_count = 0
             current_pid = os.getpid()
             
+            stop_timeout = max(1, int(self.config.get("bot_stop_timeout", 20)))
+            kill_timeout = max(1, int(self.config.get("bot_kill_timeout", 5)))
+            
             for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
                 try:
                     cmdline = proc.info.get('cmdline', [])
@@ -338,15 +343,19 @@ class TradingBotDaemon:
                         # 優雅停止：先發送 SIGTERM
                         try:
                             proc.terminate()
-                            # 等待進程終止
-                            try:
-                                proc.wait(timeout=5)
+                            if self._wait_process_exit(proc, stop_timeout):
                                 self.logger.info("進程已優雅停止", pid=proc.pid)
-                            except psutil.TimeoutExpired:
-                                # 如果5秒內沒有終止，強制殺掉
-                                self.logger.warning("進程未在5秒內終止，強制殺掉", pid=proc.pid)
+                            else:
+                                self.logger.warning(
+                                    f"進程未在 {stop_timeout} 秒內終止，強制殺掉",
+                                    pid=proc.pid
+                                )
                                 proc.kill()
-                                proc.wait(timeout=2)
+                                if not self._wait_process_exit(proc, kill_timeout):
+                                    self.logger.error(
+                                        f"強制殺掉後 {kill_timeout} 秒內仍未退出",
+                                        pid=proc.pid
+                                    )
                         except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
                             # 進程可能已經停止
                             self.logger.debug("進程已不存在或無權限", pid=proc.pid, error=str(e))
@@ -357,7 +366,7 @@ class TradingBotDaemon:
                     continue
             
             if stopped_count > 0:
-                self.logger.info("已停止 %d 個 run.py 進程", stopped_count)
+                self.logger.info(f"已停止 {stopped_count} 個 run.py 進程")
                 # 等待一下讓進程完全停止
                 time.sleep(1)
             else:
@@ -368,6 +377,16 @@ class TradingBotDaemon:
         except Exception as e:
             self.logger.error("停止舊進程時出錯", error=str(e))
             return 0
+
+    def _wait_process_exit(self, proc: psutil.Process, timeout: int) -> bool:
+        """等待指定進程在 timeout 秒內退出"""
+        try:
+            proc.wait(timeout=timeout)
+            return True
+        except (psutil.NoSuchProcess, psutil.ZombieProcess):
+            return True
+        except psutil.TimeoutExpired:
+            return False
     
     def _start_bot(self) -> bool:
         """啟動交易機器人"""

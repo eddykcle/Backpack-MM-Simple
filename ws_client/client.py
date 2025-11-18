@@ -458,8 +458,7 @@ class BackpackWebSocket:
                 on_pong=self.on_pong
             )
             
-            self.ws_thread = threading.Thread(target=self.ws_run_forever)
-            self.ws_thread.daemon = True
+            self.ws_thread = threading.Thread(target=self.ws_run_forever, daemon=True)
             self.ws_thread.start()
             
             # 啟動心跳檢測
@@ -570,8 +569,11 @@ class BackpackWebSocket:
                 )
                 
                 # 創建新線程
-                self.ws_thread = threading.Thread(target=self.ws_run_forever)
-                self.ws_thread.daemon = True
+                self.ws_thread = threading.Thread(target=self.ws_run_forever, daemon=True)
+                try:
+                    self.ws_thread.daemon = True
+                except RuntimeError:
+                    logger.debug("無法修改舊線程 daemon 狀態")
                 self.ws_thread.start()
 
                 # 更新最後心跳時間，避免重連後立即觸發心跳檢測
@@ -589,7 +591,7 @@ class BackpackWebSocket:
                 self._start_api_fallback()
                 return False
     
-    def _force_close_connection(self):
+    def _force_close_connection(self, wait_timeout: float = 2.0):
         """強制關閉現有連接"""
         try:
             # 完全斷開並清理之前的WebSocket連接
@@ -620,9 +622,15 @@ class BackpackWebSocket:
             if self.ws_thread and self.ws_thread.is_alive():
                 try:
                     # 不要無限等待線程結束
-                    self.ws_thread.join(timeout=1.0)
+                    self.ws_thread.join(timeout=wait_timeout)
                     if self.ws_thread.is_alive():
-                        logger.warning("舊線程未能在超時時間內結束，但繼續重連過程")
+                        logger.warning(
+                            "舊線程未能在線程超時內結束，強制標記為 daemon 讓其自行回收"
+                        )
+                        try:
+                            self.ws_thread.daemon = True
+                        except RuntimeError:
+                            logger.debug("無法修改舊線程 daemon 狀態")
                 except Exception as e:
                     logger.debug(f"等待舊線程終止時出錯: {e}")
             
@@ -877,15 +885,17 @@ class BackpackWebSocket:
         # 停止心跳檢測線程
         if self.heartbeat_thread and self.heartbeat_thread.is_alive():
             try:
-                self.heartbeat_thread.join(timeout=1)
-            except Exception:
-                pass
+                self.heartbeat_thread.join(timeout=3)
+                if self.heartbeat_thread.is_alive():
+                    logger.warning("心跳線程未在超時內結束")
+            except Exception as e:
+                logger.debug(f"等待心跳線程結束時出錯: {e}")
         self.heartbeat_thread = None
         
         # 強制關閉連接
-        self._force_close_connection()
+        self._force_close_connection(wait_timeout=5.0)
         
-        # 重置訂閴狀態
+        # 重置訂閲狀態
         self.subscriptions = []
 
         # 確保停止 API 備援

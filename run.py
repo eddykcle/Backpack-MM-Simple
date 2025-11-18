@@ -7,12 +7,59 @@ import argparse
 import sys
 import os
 import time
+import signal
 from typing import Optional
 from config import ENABLE_DATABASE
 from core.logger import setup_logger
 
 # 創建記錄器
 logger = setup_logger("main")
+
+
+class GracefulExit(SystemExit):
+    """用於標示需要優雅退出策略的例外"""
+    pass
+
+
+class StrategySignalHandler:
+    """在策略運行期間接管 SIGTERM/SIGINT，確保優雅退出"""
+
+    def __init__(self, strategy):
+        self.strategy = strategy
+        self._original_handlers = {}
+
+    def __enter__(self):
+        def _handle(signum, frame):
+            logger.info(f"收到系統信號，通知策略停止 (signal={signum})")
+            if self.strategy and hasattr(self.strategy, "stop"):
+                try:
+                    self.strategy.stop()
+                except Exception as exc:
+                    logger.error(f"通知策略停止時發生錯誤: {exc}")
+            raise GracefulExit()
+
+        self._handler = _handle
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            self._original_handlers[sig] = signal.getsignal(sig)
+            signal.signal(sig, _handle)
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        for sig, handler in self._original_handlers.items():
+            signal.signal(sig, handler)
+        return False
+
+
+def run_strategy_with_signals(strategy, duration_seconds, interval_seconds):
+    """注入信號處理後運行策略"""
+    if strategy is None:
+        raise ValueError("strategy 實例不可為 None")
+
+    try:
+        with StrategySignalHandler(strategy):
+            strategy.run(duration_seconds=duration_seconds, interval_seconds=interval_seconds)
+    except GracefulExit:
+        logger.info("策略收到停止信號，結束運行")
 
 def parse_arguments():
     """解析命令行參數"""
@@ -401,8 +448,12 @@ def main():
                         enable_database=args.enable_db
                     )
             
-            # 執行做市策略
-            market_maker.run(duration_seconds=args.duration, interval_seconds=args.interval)
+            # 執行做市策略（加入信號處理）
+            run_strategy_with_signals(
+                market_maker,
+                duration_seconds=args.duration,
+                interval_seconds=args.interval,
+            )
             
         except KeyboardInterrupt:
             logger.info("收到中斷信號，正在退出...")

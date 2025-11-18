@@ -2461,3 +2461,8 @@ class MarketMaker:
             if self.db:
                 self.db.close()
                 logger.info("數據庫連接已關閉")
+
+            # 關閉背景執行緒池，避免阻塞進程退出
+            if hasattr(self, "executor") and self.executor:
+                self.executor.shutdown(wait=False)
+                logger.info("背景執行緒池已關閉")
