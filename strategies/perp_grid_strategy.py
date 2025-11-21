@@ -8,6 +8,7 @@ import math
 import time
 from collections import defaultdict
 from datetime import datetime
+import threading
 from typing import Dict, List, Optional, Tuple, Any, Set, Iterable
 
 from core.logger import setup_logger
@@ -204,6 +205,9 @@ class PerpGridStrategy(PerpetualMarketMaker):
         # 訂單ID別名：clientOrderIndex 與交易所 order_id 對應
         self.order_alias_map: Dict[str, str] = {}
         self.order_aliases_by_primary: Dict[str, Set[str]] = {}
+
+        # 併發保護，用於運行中調整網格範圍
+        self.grid_operation_lock = threading.RLock()
 
         logger.info("初始化永續合約網格交易策略: %s", symbol)
         logger.info("網格數量: %d | 模式: %s | 類型: %s", self.grid_num, self.grid_mode, self.grid_type)
@@ -1441,28 +1445,112 @@ class PerpGridStrategy(PerpetualMarketMaker):
 
     def place_limit_orders(self) -> None:
         """放置限價單 - 覆蓋父類方法（增加倉位變化檢測）"""
-        if not self.grid_initialized:
+        with self.grid_operation_lock:
+            if not self.grid_initialized:
+                success = self.initialize_grid()
+                if not success:
+                    logger.error("網格初始化失敗")
+                    return
+                # 初始化後記錄持倉快照
+                self.last_position_snapshot = self.get_net_position()
+            else:
+                # 【新增】倉位變化檢測，補強訂單狀態的遺漏
+                self._check_position_changes()
+                
+                # 一次性獲取所有必要數據，然後檢查並補充缺失的網格訂單
+                current_price = self.get_current_price()
+                try:
+                    open_orders = self.client.get_open_orders(self.symbol) or []
+                except Exception as exc:
+                    logger.warning("無法獲取現有訂單: %s", exc)
+                    open_orders = []
+                
+                # 傳遞數據給 _refill_grid_orders，避免重複請求
+                self._refill_grid_orders(current_price=current_price, 
+                                        open_orders=open_orders)
+
+    def adjust_grid_range(
+        self,
+        new_lower_price: Optional[float] = None,
+        new_upper_price: Optional[float] = None,
+    ) -> bool:
+        """
+        在運行中調整永續網格的價格區間並重新初始化網格。
+
+        Args:
+            new_lower_price: 新的網格下限（None 沿用現值）
+            new_upper_price: 新的網格上限（None 沿用現值）
+
+        Returns:
+            bool: 調整是否成功
+        """
+        with self.grid_operation_lock:
+            if new_lower_price is None and new_upper_price is None:
+                logger.error("未提供新的網格上下限，調整已取消")
+                return False
+
+            target_lower = (
+                float(new_lower_price) if new_lower_price is not None else self.grid_lower_price
+            )
+            target_upper = (
+                float(new_upper_price) if new_upper_price is not None else self.grid_upper_price
+            )
+
+            if target_lower is None or target_upper is None:
+                logger.error("缺少網格上下限，請先初始化網格再進行調整")
+                return False
+
+            rounded_lower = round_to_tick_size(target_lower, self.tick_size)
+            rounded_upper = round_to_tick_size(target_upper, self.tick_size)
+
+            if rounded_lower >= rounded_upper:
+                logger.error(
+                    "無效的網格區間: 下限 %.8f 必須小於上限 %.8f",
+                    rounded_lower,
+                    rounded_upper,
+                )
+                return False
+
+            original_lower = self.grid_lower_price
+            original_upper = self.grid_upper_price
+            original_auto_range = self.auto_price_range
+
+            logger.info(
+                "調整永續網格範圍: %.4f ~ %.4f -> %.4f ~ %.4f (類型: %s)",
+                original_lower or 0,
+                original_upper or 0,
+                rounded_lower,
+                rounded_upper,
+                self.grid_type,
+            )
+
+            self.auto_price_range = False
+            self.grid_lower_price = rounded_lower
+            self.grid_upper_price = rounded_upper
+            self.grid_initialized = False
+
             success = self.initialize_grid()
-            if not success:
-                logger.error("網格初始化失敗")
-                return
-            # 初始化後記錄持倉快照
+            if success:
+                logger.info(
+                    "永續網格範圍調整完成，新區間: %.4f ~ %.4f",
+                    self.grid_lower_price,
+                    self.grid_upper_price,
+                )
+                self.last_position_snapshot = self.get_net_position()
+                return True
+
+            logger.error("永續網格範圍調整失敗，嘗試恢復原設定...")
+            self.auto_price_range = original_auto_range
+            self.grid_lower_price = original_lower
+            self.grid_upper_price = original_upper
+            self.grid_initialized = False
+            restore_success = self.initialize_grid()
+            if restore_success:
+                logger.warning("已恢復原始永續網格區間: %.4f ~ %.4f", original_lower, original_upper)
+            else:
+                logger.critical("恢復原始永續網格失敗，請手動檢查策略狀態")
             self.last_position_snapshot = self.get_net_position()
-        else:
-            # 【新增】倉位變化檢測，補強訂單狀態的遺漏
-            self._check_position_changes()
-            
-            # 一次性獲取所有必要數據，然後檢查並補充缺失的網格訂單
-            current_price = self.get_current_price()
-            try:
-                open_orders = self.client.get_open_orders(self.symbol) or []
-            except Exception as exc:
-                logger.warning("無法獲取現有訂單: %s", exc)
-                open_orders = []
-            
-            # 傳遞數據給 _refill_grid_orders，避免重複請求
-            self._refill_grid_orders(current_price=current_price, 
-                                    open_orders=open_orders)
+            return False
 
     def _reconcile_grid_orders_from_list(self, open_orders: List) -> Dict[str, Dict[float, int]]:
         """統計目前在交易所實際掛出的開倉單數量，從訂單列表中統計。

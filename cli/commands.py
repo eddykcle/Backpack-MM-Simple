@@ -5,6 +5,7 @@ import time
 import os
 from typing import Optional
 from datetime import datetime
+import requests
 
 from api.bp_client import BPClient
 from api.aster_client import AsterClient
@@ -925,6 +926,58 @@ def run_market_maker_command(api_key, secret_key):
             except Exception:
                 pass
 
+
+def grid_adjust_command():
+    """透過 Web 控制端即時調整網格上下限"""
+    default_host = os.getenv('WEB_HOST', '127.0.0.1')
+    default_port = os.getenv('WEB_PORT', '5000')
+    default_base = os.getenv('WEB_API_BASE', f"http://127.0.0.1:{default_port}")
+
+    print("\n=== 網格範圍調整 ===")
+    base_url_input = input(f"請輸入 Web 控制端地址 (默認 {default_base}): ").strip()
+    base_url = base_url_input or default_base
+    base_url = base_url.rstrip('/')
+
+    lower_input = input("新的網格下限價格 (留空沿用當前設定): ").strip()
+    upper_input = input("新的網格上限價格 (留空沿用當前設定): ").strip()
+
+    payload = {}
+    try:
+        if lower_input:
+            payload['grid_lower_price'] = float(lower_input)
+        if upper_input:
+            payload['grid_upper_price'] = float(upper_input)
+    except ValueError:
+        print("錯誤: 請輸入有效的數值。")
+        return
+
+    if not payload:
+        print("未輸入任何新範圍，操作已取消。")
+        return
+
+    endpoint = f"{base_url}/api/grid/adjust"
+    print(f"正在向 {endpoint} 發送調整請求...")
+
+    try:
+        response = requests.post(endpoint, json=payload, timeout=15)
+    except requests.RequestException as exc:
+        print(f"發送請求失敗: {exc}")
+        return
+
+    try:
+        result = response.json()
+    except ValueError:
+        print(f"服務端返回非JSON響應: {response.text}")
+        return
+
+    if response.ok and result.get('success'):
+        lower = result.get('grid_lower_price')
+        upper = result.get('grid_upper_price')
+        print(f"網格範圍調整成功，新區間: {lower} ~ {upper}")
+    else:
+        message = result.get('message') if isinstance(result, dict) else response.text
+        print(f"網格調整失敗: {message}")
+
 def rebalance_settings_command():
     """重平設置管理命令"""
     print("\n=== 重平設置管理 ===")
@@ -1314,13 +1367,14 @@ def main_cli(api_key=API_KEY, secret_key=SECRET_KEY, enable_database=ENABLE_DATA
         print("3 - 獲取市場信息")
         print("4 - 獲取訂單簿")
         print("5 - 執行現貨/合約做市/對沖/網格 策略")
-        stats_label = "6 - 交易統計報表" if USE_DATABASE else "6 - 交易統計報表 (已停用)"
+        print("6 - 調整運行中網格範圍（需 Web 控制端）")
+        stats_label = "7 - 交易統計報表" if USE_DATABASE else "7 - 交易統計報表 (已停用)"
         print(stats_label)
-        print("7 - 市場分析")
-        print("8 - 重平設置管理")
+        print("8 - 市場分析")
+        print("9 - 重平設置管理")
         db_status = "開啟" if USE_DATABASE else "關閉"
-        print(f"D - 切換資料庫寫入 (目前: {db_status})")
-        print("9 - 退出")
+        print(f"10 - 切換資料庫寫入 (目前: {db_status})")
+        print("11 - 退出程序")
 
         operation = input("請輸入操作類型: ")
 
@@ -1335,14 +1389,16 @@ def main_cli(api_key=API_KEY, secret_key=SECRET_KEY, enable_database=ENABLE_DATA
         elif operation == '5':
             run_market_maker_command(api_key, secret_key)
         elif operation == '6':
-            trading_stats_command(api_key, secret_key)
+            grid_adjust_command()
         elif operation == '7':
-            market_analysis_command(api_key, secret_key)
+            trading_stats_command(api_key, secret_key)
         elif operation == '8':
-            rebalance_settings_command()
-        elif operation.lower() == 'd':
-            toggle_database_command()
+            market_analysis_command(api_key, secret_key)
         elif operation == '9':
+            rebalance_settings_command()
+        elif operation == '10' or operation.lower() == 'd':
+            toggle_database_command()
+        elif operation == '11':
             print("退出程序。")
             break
         else:

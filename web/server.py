@@ -384,6 +384,64 @@ def start_bot():
         return jsonify({'success': False, 'message': f'啟動失敗: {str(e)}'}), 500
 
 
+@app.route('/api/grid/adjust', methods=['POST'])
+def adjust_grid_range():
+    """在機器人運行期間調整網格上下限"""
+    global current_strategy
+
+    if not bot_status.get('running'):
+        return jsonify({'success': False, 'message': '機器人未運行，無法調整網格'}), 400
+
+    if not current_strategy:
+        return jsonify({'success': False, 'message': '沒有可調整的策略實例'}), 400
+
+    if not hasattr(current_strategy, 'adjust_grid_range'):
+        return jsonify({'success': False, 'message': '當前策略不支援網格調整'}), 400
+
+    try:
+        data = request.json or {}
+        upper_raw = data.get('grid_upper_price')
+        lower_raw = data.get('grid_lower_price')
+
+        new_upper = float(upper_raw) if upper_raw is not None else None
+        new_lower = float(lower_raw) if lower_raw is not None else None
+
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'message': '網格上下限必須為數值'}), 400
+
+    if new_lower is None and new_upper is None:
+        return jsonify({'success': False, 'message': '請至少提供新的上限或下限'}), 400
+
+    try:
+        success = current_strategy.adjust_grid_range(new_lower, new_upper)
+    except Exception as exc:
+        logger.error("調整網格範圍時發生例外: %s", exc)
+        traceback.print_exc()
+        return jsonify({'success': False, 'message': f'調整失敗: {exc}'}), 500
+
+    if not success:
+        return jsonify({'success': False, 'message': '策略拒絕調整或初始化失敗'}), 400
+
+    stats_update = {
+        'grid_lower_price': getattr(current_strategy, 'grid_lower_price', None),
+        'grid_upper_price': getattr(current_strategy, 'grid_upper_price', None),
+    }
+    socketio.emit('grid_adjusted', stats_update)
+
+    logger.info(
+        "網格範圍調整成功: %.4f ~ %.4f",
+        stats_update['grid_lower_price'] or 0,
+        stats_update['grid_upper_price'] or 0,
+    )
+
+    return jsonify({
+        'success': True,
+        'message': '網格範圍已更新',
+        'grid_lower_price': stats_update['grid_lower_price'],
+        'grid_upper_price': stats_update['grid_upper_price'],
+    })
+
+
 @app.route('/api/stop', methods=['POST'])
 def stop_bot():
     """停止做市機器人"""

@@ -75,6 +75,19 @@ pip install psutil requests
 .venv/bin/python3 core/daemon_manager.py restart
 ```
 
+### 調整運行中的網格範圍
+
+# 如果機器人正在運行，可以通過 CLI 調整網格上下限：
+
+```bash
+# 運行CLI模式
+python run.py --cli
+
+選擇選單 10
+輸入 Web 控制端地址: http://127.0.0.1:5000
+輸入新的上下限
+```
+
 **注意**：如果已經激活虛擬環境（`source .venv/bin/activate`），也可以直接使用 `python` 或 `python3`。
 
 ### 4. 啟動監控

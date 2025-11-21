@@ -448,12 +448,42 @@ def main():
                         enable_database=args.enable_db
                     )
             
+            # 註冊策略到 Web 控制端（用於熱調整等功能）
+            try:
+                from web.server import current_strategy as web_current_strategy, bot_status
+                from datetime import datetime
+                
+                # 更新全局狀態（使用 global 關鍵字）
+                import web.server as web_server
+                web_server.current_strategy = market_maker
+                bot_status['running'] = True
+                bot_status['strategy'] = args.strategy if hasattr(args, 'strategy') else 'standard'
+                bot_status['start_time'] = datetime.now().isoformat()
+                bot_status['last_update'] = datetime.now().isoformat()
+                
+                logger.info("策略已註冊到 Web 控制端，支持熱調整功能")
+            except Exception as e:
+                logger.warning(f"註冊策略到 Web 控制端失敗: {e}，熱調整功能可能不可用")
+            
             # 執行做市策略（加入信號處理）
-            run_strategy_with_signals(
-                market_maker,
-                duration_seconds=args.duration,
-                interval_seconds=args.interval,
-            )
+            try:
+                run_strategy_with_signals(
+                    market_maker,
+                    duration_seconds=args.duration,
+                    interval_seconds=args.interval,
+                )
+            finally:
+                # 清理 Web 控制端狀態
+                try:
+                    from web.server import current_strategy as web_current_strategy, bot_status
+                    from datetime import datetime
+                    import web.server as web_server
+                    web_server.current_strategy = None
+                    bot_status['running'] = False
+                    bot_status['last_update'] = datetime.now().isoformat()
+                    logger.info("策略已從 Web 控制端註銷")
+                except Exception:
+                    pass
             
         except KeyboardInterrupt:
             logger.info("收到中斷信號，正在退出...")

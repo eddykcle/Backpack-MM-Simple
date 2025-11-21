@@ -7,6 +7,7 @@ from __future__ import annotations
 import math
 from collections import defaultdict
 from datetime import datetime
+import threading
 from typing import Dict, List, Optional, Tuple, Any
 
 from core.logger import setup_logger
@@ -112,6 +113,9 @@ class GridStrategy(MarketMaker):
         self.grid_buy_filled_count = 0
         self.grid_sell_filled_count = 0
         self.grid_profit = 0.0
+
+        # 併發保護，避免在運行中調整網格時與例行補單衝突
+        self.grid_operation_lock = threading.RLock()
 
         logger.info("初始化網格交易策略: %s", symbol)
         logger.info("網格數量: %d | 模式: %s", self.grid_num, self.grid_mode)
@@ -714,25 +718,26 @@ class GridStrategy(MarketMaker):
 
     def place_limit_orders(self) -> None:
         """放置限價單 - 覆蓋父類方法"""
-        if not self.grid_initialized:
-            success = self.initialize_grid()
-            if not success:
-                logger.error("網格初始化失敗")
-                return
-        else:
-            # 一次性獲取所有必要數據，然後檢查並補充缺失的網格訂單
-            current_price = self.get_current_price()
-            balances = self.get_balance()
-            try:
-                open_orders = self.client.get_open_orders(self.symbol) or []
-            except Exception as exc:
-                logger.warning("無法獲取現有訂單: %s", exc)
-                open_orders = []
-            
-            # 傳遞數據給 _refill_grid_orders，避免重複請求
-            self._refill_grid_orders(current_price=current_price, 
-                                    balances=balances, 
-                                    open_orders=open_orders)
+        with self.grid_operation_lock:
+            if not self.grid_initialized:
+                success = self.initialize_grid()
+                if not success:
+                    logger.error("網格初始化失敗")
+                    return
+            else:
+                # 一次性獲取所有必要數據，然後檢查並補充缺失的網格訂單
+                current_price = self.get_current_price()
+                balances = self.get_balance()
+                try:
+                    open_orders = self.client.get_open_orders(self.symbol) or []
+                except Exception as exc:
+                    logger.warning("無法獲取現有訂單: %s", exc)
+                    open_orders = []
+                
+                # 傳遞數據給 _refill_grid_orders，避免重複請求
+                self._refill_grid_orders(current_price=current_price, 
+                                        balances=balances, 
+                                        open_orders=open_orders)
 
     def _reconcile_grid_orders_from_list(self, open_orders: List) -> Dict[str, Dict[float, int]]:
         """統計實際掛單數量（按價格/方向），從訂單列表中統計。
@@ -853,6 +858,91 @@ class GridStrategy(MarketMaker):
     def rebalance_position(self) -> None:
         """網格策略不需要rebalance"""
         pass
+
+    def adjust_grid_range(
+        self,
+        new_lower_price: Optional[float] = None,
+        new_upper_price: Optional[float] = None,
+    ) -> bool:
+        """
+        在策略運行期間動態調整網格上下限並重新初始化網格。
+
+        Args:
+            new_lower_price: 新的網格下限，None 表示沿用現值
+            new_upper_price: 新的網格上限，None 表示沿用現值
+
+        Returns:
+            bool: 調整是否成功
+        """
+        with self.grid_operation_lock:
+            if not self.symbol:
+                logger.error("尚未指定交易對，無法調整網格範圍")
+                return False
+
+            if new_lower_price is None and new_upper_price is None:
+                logger.error("未提供新的網格上下限，調整已取消")
+                return False
+
+            target_lower = (
+                float(new_lower_price) if new_lower_price is not None else self.grid_lower_price
+            )
+            target_upper = (
+                float(new_upper_price) if new_upper_price is not None else self.grid_upper_price
+            )
+
+            if target_lower is None or target_upper is None:
+                logger.error("目前網格尚未設置上下限，請先初始化網格")
+                return False
+
+            rounded_lower = round_to_tick_size(target_lower, self.tick_size)
+            rounded_upper = round_to_tick_size(target_upper, self.tick_size)
+
+            if rounded_lower >= rounded_upper:
+                logger.error(
+                    "新的網格區間無效: 下限 %.8f 必須小於上限 %.8f",
+                    rounded_lower,
+                    rounded_upper,
+                )
+                return False
+
+            original_lower = self.grid_lower_price
+            original_upper = self.grid_upper_price
+
+            logger.info(
+                "開始調整網格範圍: %.4f ~ %.4f -> %.4f ~ %.4f",
+                original_lower or 0,
+                original_upper or 0,
+                rounded_lower,
+                rounded_upper,
+            )
+
+            # 改為手動範圍，避免初始化時被自動模式覆蓋
+            original_auto_range = self.auto_price_range
+            self.auto_price_range = False
+            self.grid_lower_price = rounded_lower
+            self.grid_upper_price = rounded_upper
+            self.grid_initialized = False
+
+            success = self.initialize_grid()
+            if success:
+                logger.info(
+                    "網格範圍調整完成，新區間: %.4f ~ %.4f",
+                    self.grid_lower_price,
+                    self.grid_upper_price,
+                )
+                return True
+
+            logger.error("網格範圍調整失敗，嘗試恢復原設定...")
+            self.auto_price_range = original_auto_range
+            self.grid_lower_price = original_lower
+            self.grid_upper_price = original_upper
+            self.grid_initialized = False
+            restore_success = self.initialize_grid()
+            if restore_success:
+                logger.warning("已恢復原始網格區間: %.4f ~ %.4f", original_lower, original_upper)
+            else:
+                logger.critical("恢復原始網格失敗，請手動檢查策略狀態")
+            return False
 
     def _get_extra_summary_sections(self):
         """添加網格特有的統計信息"""
