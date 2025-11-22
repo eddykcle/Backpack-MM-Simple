@@ -220,20 +220,70 @@ class StructuredLogger:
         else:
             log_method(message)
     
-    def info(self, message: str, **kwargs):
-        self.log_structured('INFO', message, kwargs)
+    def info(self, message: str, *args, **kwargs):
+        if args:
+            # 如果有位置參數，使用傳統格式化
+            try:
+                formatted_message = message % args
+            except (TypeError, ValueError):
+                # 如果格式化失敗，使用原始消息
+                formatted_message = message
+            self.log_structured('INFO', formatted_message, kwargs)
+        else:
+            # 沒有位置參數，使用現有邏輯
+            self.log_structured('INFO', message, kwargs)
     
-    def warning(self, message: str, **kwargs):
-        self.log_structured('WARNING', message, kwargs)
+    def warning(self, message: str, *args, **kwargs):
+        if args:
+            # 如果有位置參數，使用傳統格式化
+            try:
+                formatted_message = message % args
+            except (TypeError, ValueError):
+                # 如果格式化失敗，使用原始消息
+                formatted_message = message
+            self.log_structured('WARNING', formatted_message, kwargs)
+        else:
+            # 沒有位置參數，使用現有邏輯
+            self.log_structured('WARNING', message, kwargs)
     
-    def error(self, message: str, **kwargs):
-        self.log_structured('ERROR', message, kwargs)
+    def error(self, message: str, *args, **kwargs):
+        if args:
+            # 如果有位置參數，使用傳統格式化
+            try:
+                formatted_message = message % args
+            except (TypeError, ValueError):
+                # 如果格式化失敗，使用原始消息
+                formatted_message = message
+            self.log_structured('ERROR', formatted_message, kwargs)
+        else:
+            # 沒有位置參數，使用現有邏輯
+            self.log_structured('ERROR', message, kwargs)
     
-    def debug(self, message: str, **kwargs):
-        self.log_structured('DEBUG', message, kwargs)
+    def debug(self, message: str, *args, **kwargs):
+        if args:
+            # 如果有位置參數，使用傳統格式化
+            try:
+                formatted_message = message % args
+            except (TypeError, ValueError):
+                # 如果格式化失敗，使用原始消息
+                formatted_message = message
+            self.log_structured('DEBUG', formatted_message, kwargs)
+        else:
+            # 沒有位置參數，使用現有邏輯
+            self.log_structured('DEBUG', message, kwargs)
     
-    def critical(self, message: str, **kwargs):
-        self.log_structured('CRITICAL', message, kwargs)
+    def critical(self, message: str, *args, **kwargs):
+        if args:
+            # 如果有位置參數，使用傳統格式化
+            try:
+                formatted_message = message % args
+            except (TypeError, ValueError):
+                # 如果格式化失敗，使用原始消息
+                formatted_message = message
+            self.log_structured('CRITICAL', formatted_message, kwargs)
+        else:
+            # 沒有位置參數，使用現有邏輯
+            self.log_structured('CRITICAL', message, kwargs)
 
 class ProcessManager:
     """進程管理器，替代nohup的功能"""
