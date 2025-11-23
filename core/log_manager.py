@@ -438,8 +438,26 @@ def get_process_manager() -> ProcessManager:
     return ProcessManager()
 
 # 清理舊日誌的函數
-def cleanup_old_logs(log_dir: str = "logs", days_to_keep: int = 30):
-    """清理超過指定天數的舊日誌文件"""
+def cleanup_old_logs(log_dir: str = "logs", days_to_keep: int = 2, cleanup_root_logs: bool = True):
+    """清理超過指定天數的舊日誌文件
+    
+    Args:
+        log_dir: 日誌目錄路徑，默認為 "logs"
+        days_to_keep: 保留天數，默認為2天
+        cleanup_root_logs: 是否清理根目錄的log檔案，默認為True
+    """
+    import glob
+    from datetime import datetime, timedelta
+    
+    # 清理指定日誌目錄
+    _cleanup_log_directory(log_dir, days_to_keep)
+    
+    # 清理根目錄的log檔案
+    if cleanup_root_logs:
+        _cleanup_root_logs(days_to_keep)
+
+def _cleanup_log_directory(log_dir: str, days_to_keep: int):
+    """清理指定目錄的日誌檔案"""
     import glob
     from datetime import datetime, timedelta
     
@@ -448,6 +466,7 @@ def cleanup_old_logs(log_dir: str = "logs", days_to_keep: int = 30):
         return
     
     cutoff_date = datetime.now() - timedelta(days=days_to_keep)
+    cleaned_count = 0
     
     # 清理所有.log和.gz文件
     for pattern in ['*.log', '*.log.*', '*.gz']:
@@ -458,8 +477,102 @@ def cleanup_old_logs(log_dir: str = "logs", days_to_keep: int = 30):
                 if mtime < cutoff_date:
                     file_path.unlink()
                     print(f"刪除舊日誌文件: {file_path}")
+                    cleaned_count += 1
             except Exception as e:
                 print(f"刪除文件失敗 {file_path}: {e}")
+    
+    if cleaned_count > 0:
+        print(f"已清理 {log_dir} 目錄下的 {cleaned_count} 個舊日誌文件")
+
+def _cleanup_root_logs(days_to_keep: int):
+    """清理根目錄的日誌檔案"""
+    from datetime import datetime, timedelta
+    
+    # 獲取根目錄路徑（當前工作目錄）
+    root_path = Path.cwd()
+    cutoff_date = datetime.now() - timedelta(days=days_to_keep)
+    cleaned_count = 0
+    
+    # 要清理的根目錄log檔案模式
+    root_log_patterns = [
+        'market_maker.log',  # 主要的根目錄log檔案
+        '*.log',             # 其他可能的log檔案
+    ]
+    
+    # 排除的檔案（系統重要檔案）
+    exclude_files = {
+        'setup.py', 'requirements.txt', 'README.md', '.gitignore',
+        'LICENSE', 'Dockerfile', 'docker-compose.yml'
+    }
+    
+    for pattern in root_log_patterns:
+        for file_path in root_path.glob(pattern):
+            # 跳過排除的檔案和目錄
+            if (file_path.name in exclude_files or 
+                file_path.is_dir() or 
+                str(file_path).startswith('./logs/')):
+                continue
+                
+            try:
+                # 檢查檔案修改時間
+                mtime = datetime.fromtimestamp(file_path.stat().st_mtime)
+                if mtime < cutoff_date:
+                    # 額外安全檢查：確保這真的是log檔案
+                    if _is_safe_to_delete_log(file_path):
+                        file_path.unlink()
+                        print(f"刪除根目錄舊日誌文件: {file_path}")
+                        cleaned_count += 1
+                    else:
+                        print(f"跳過非日誌文件: {file_path}")
+            except Exception as e:
+                print(f"刪除根目錄文件失敗 {file_path}: {e}")
+    
+    if cleaned_count > 0:
+        print(f"已清理根目錄下的 {cleaned_count} 個舊日誌文件")
+
+def _is_safe_to_delete_log(file_path: Path) -> bool:
+    """檢查檔案是否安全刪除（確保是log檔案）"""
+    
+    # 檢查檔案副檔名
+    if file_path.suffix != '.log':
+        return False
+    
+    # 檢查檔案大小（避免刪除重要的配置檔案）
+    try:
+        file_size = file_path.stat().st_size
+        if file_size == 0:
+            return True  # 空檔案可以安全刪除
+        
+        # 檢查檔案內容是否包含日誌特徵
+        try:
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                # 讀取前幾行檢查是否包含日誌特徵
+                first_lines = [f.readline().strip() for _ in range(3)]
+                
+                # 日誌檔案的特徵關鍵字
+                log_keywords = [
+                    ' - INFO - ', ' - ERROR - ', ' - WARNING - ', ' - DEBUG - ',
+                    '[INFO]', '[ERROR]', '[WARNING]', '[DEBUG]',
+                    'timestamp', 'level', 'message'
+                ]
+                
+                for line in first_lines:
+                    if line and any(keyword in line for keyword in log_keywords):
+                        return True
+                        
+        except (UnicodeDecodeError, IOError):
+            # 無法讀取的檔案，不刪除
+            return False
+            
+    except OSError:
+        return False
+    
+    # 已知的根目錄log檔案名稱
+    known_root_logs = {'market_maker.log'}
+    if file_path.name in known_root_logs:
+        return True
+    
+    return False
 
 if __name__ == "__main__":
     # 測試日誌系統
