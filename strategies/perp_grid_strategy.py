@@ -96,6 +96,10 @@ class PerpGridStrategy(PerpetualMarketMaker):
         exchange: str = 'backpack',
         exchange_config: Optional[Dict[str, Any]] = None,
         enable_database: bool = True,
+        # 新增：邊界處理配置
+        boundary_action: str = "emergency_close",  # 邊界觸發時的處理方式: "emergency_close", "adjust_range", "stop_only"
+        boundary_tolerance: float = 0.001,        # 邊界觸發的容差 (0.1%)
+        enable_boundary_check: bool = True,        # 是否啟用邊界檢查
         **kwargs,
     ) -> None:
         """
@@ -122,6 +126,9 @@ class PerpGridStrategy(PerpetualMarketMaker):
             exchange: 交易所名稱
             exchange_config: 交易所配置
             enable_database: 是否啓用數據庫
+            boundary_action: 邊界觸發時的處理方式 ("emergency_close", "adjust_range", "stop_only")
+            boundary_tolerance: 邊界觸發的容差 (0.1% = 0.001)
+            enable_boundary_check: 是否啟用邊界檢查
         """
         super().__init__(
             api_key=api_key,
@@ -167,6 +174,20 @@ class PerpGridStrategy(PerpetualMarketMaker):
         # 網格狀態
         self.grid_initialized = False
         self.grid_levels: List[float] = []
+        
+        # 邊界處理配置
+        self.boundary_action = boundary_action
+        self.boundary_tolerance = max(0.0, min(1.0, boundary_tolerance))
+        self.enable_boundary_check = enable_boundary_check
+        
+        # 驗證邊界處理配置
+        valid_actions = {"emergency_close", "adjust_range", "stop_only"}
+        if self.boundary_action not in valid_actions:
+            logger.error(f"無效的 boundary_action: {self.boundary_action}，必須是 {valid_actions} 中的一個")
+            self.boundary_action = "emergency_close"
+        
+        logger.info("邊界處理配置: 處理方式=%s, 容差=%.3f%%, 啟用=%s",
+                   self.boundary_action, self.boundary_tolerance * 100, self.enable_boundary_check)
 
         # === 新的網格訂單追蹤系統 ===
         # 開倉單追蹤：{price: {order_id: order_info}}
@@ -1444,8 +1465,13 @@ class PerpGridStrategy(PerpetualMarketMaker):
             logger.info("掛出平空單，潛在利潤: %.4f %s", grid_profit, self.quote_asset)
 
     def place_limit_orders(self) -> None:
-        """放置限價單 - 覆蓋父類方法（增加倉位變化檢測）"""
+        """放置限價單 - 覆蓋父類方法（增加倉位變化檢測和邊界檢查）"""
         with self.grid_operation_lock:
+            # 【新增】檢查價格邊界
+            if self._check_price_boundaries():
+                self._handle_boundary_breach()
+                return
+                
             if not self.grid_initialized:
                 success = self.initialize_grid()
                 if not success:
@@ -1466,7 +1492,7 @@ class PerpGridStrategy(PerpetualMarketMaker):
                     open_orders = []
                 
                 # 傳遞數據給 _refill_grid_orders，避免重複請求
-                self._refill_grid_orders(current_price=current_price, 
+                self._refill_grid_orders(current_price=current_price,
                                         open_orders=open_orders)
 
     def adjust_grid_range(
@@ -1806,6 +1832,84 @@ class PerpGridStrategy(PerpetualMarketMaker):
         ))
 
         return sections
+
+    def _check_price_boundaries(self) -> bool:
+        """檢查當前價格是否超出網格範圍
+        
+        Returns:
+            bool: 是否超出網格範圍
+        """
+        if not self.enable_boundary_check:
+            return False
+            
+        if not self.grid_initialized:
+            return False
+            
+        current_price = self.get_current_price()
+        if not current_price:
+            logger.warning("無法獲取當前價格，跳過邊界檢查")
+            return False
+            
+        # 檢查是否超出網格範圍（允許一定容差）
+        upper_threshold = self.grid_upper_price * (1 + self.boundary_tolerance)
+        lower_threshold = self.grid_lower_price * (1 - self.boundary_tolerance)
+        
+        if current_price > upper_threshold:
+            logger.warning(
+                f"價格 {current_price:.4f} 超出網格上限 {self.grid_upper_price:.4f} (容差: {self.boundary_tolerance:.3%})"
+            )
+            return True
+        elif current_price < lower_threshold:
+            logger.warning(
+                f"價格 {current_price:.4f} 低於網格下限 {self.grid_lower_price:.4f} (容差: {self.boundary_tolerance:.3%})"
+            )
+            return True
+            
+        return False
+
+    def _handle_boundary_breach(self) -> None:
+        """根據配置處理價格觸碰網格邊界"""
+        logger.warning(f"價格觸碰網格邊界，執行 {self.boundary_action} 處理策略")
+        
+        if self.boundary_action == "emergency_close":
+            # 緊急平倉並停止策略
+            logger.info("執行緊急平倉並停止策略")
+            self.cancel_existing_orders()
+            
+            # 平掉所有持倉
+            net_position = self.get_net_position()
+            if abs(net_position) > self.min_order_size:
+                logger.info(f"平掉所有持倉: {net_position:.4f}")
+                self.close_position(order_type="Market")
+            
+            # 停止策略運行
+            self._stop_trading = True
+            self.stop_reason = "價格觸碰網格邊界，已執行緊急平倉"
+            
+        elif self.boundary_action == "adjust_range":
+            # 自動調整網格範圍
+            logger.info("自動調整網格範圍")
+            current_price = self.get_current_price()
+            if current_price:
+                price_range = current_price * (self.price_range_percent / 100)
+                success = self.adjust_grid_range(
+                    new_lower_price=current_price - price_range,
+                    new_upper_price=current_price + price_range
+                )
+                if not success:
+                    logger.error("自動調整網格範圍失敗，回退到緊急平倉")
+                    self.boundary_action = "emergency_close"
+                    self._handle_boundary_breach()
+                    
+        elif self.boundary_action == "stop_only":
+            # 只停止新訂單，保留持倉
+            logger.info("停止新訂單但保留持倉")
+            self.cancel_existing_orders()
+            self._stop_trading = True
+            self.stop_reason = "價格觸碰網格邊界，已停止新訂單"
+            
+        else:
+            logger.error(f"未知的邊界處理方式: {self.boundary_action}")
 
     def run(self, duration_seconds=3600, interval_seconds=60):
         """運行永續合約網格交易策略"""

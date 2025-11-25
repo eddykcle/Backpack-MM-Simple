@@ -35,9 +35,14 @@
     "400",
     "--take-profit",
     "800",
+    "--boundary-action",
+    "emergency_close",
+    "--boundary-tolerance",
+    "0.001",
+    "--enable-boundary-check",
     "--duration",
     "1209600",
     "--interval",
     "90"
-]
+  ]
 }
