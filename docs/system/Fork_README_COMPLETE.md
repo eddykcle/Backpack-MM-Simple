@@ -898,6 +898,43 @@ git checkout upstream/main -- path/to/file
 - 提供完整的配置文件支持
 - 支持SSH斷開後繼續運行
 
+### v1.1.0 (2025-11-25) - 網格策略邊界處理功能
+
+#### 新增功能
+- **永續網格邊界處理機制**: 為 `strategies/perp_grid_strategy.py` 添加了可配置的邊界觸發處理功能
+- **三種處理策略**:
+  - `emergency_close`: 緊急平倉並停止策略（默認）
+  - `adjust_range`: 自動調整網格範圍
+  - `stop_only`: 只停止新訂單但保留持倉
+- **容差機制**: 支持設置邊界觸發容差，避免頻繁觸發
+- **可選禁用**: 允許用戶完全禁用邊界檢查功能
+
+#### 新增配置參數
+```json
+"--boundary-action", "emergency_close",
+"--boundary-tolerance", "0.001",
+"--enable-boundary-check"
+```
+
+#### 技術實現
+- `_check_price_boundaries()`: 檢查當前價格是否超出網格範圍
+- `_handle_boundary_breach()`: 根據配置處理價格觸碰網格邊界
+- 集成到 `place_limit_orders()` 方法中，在每次訂單更新前檢查邊界
+
+#### 使用方法
+```bash
+# 通過配置文件調整
+# 編輯 config/daemon_config.json
+
+# 通過命令行參數調整
+python run.py --exchange backpack --symbol ETH_USDC_PERP --strategy perp_grid --boundary-action adjust_range
+```
+
+#### 風險控制效果
+- 防止價格大幅偏離網格範圍時的極端損失
+- 提供靈活的應對策略，適應不同市場情況
+- 在每次訂單更新前檢查邊界，確保及時處理
+
 ### 未來計劃
 
 - [ ] Web界面管理
