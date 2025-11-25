@@ -14,28 +14,6 @@
   - myfork: https://github.com/eddykcle/Backpack-MM-Simple.git (您的fork)
   - origin: https://github.com/yanowo/Backpack-MM-Simple.git (原始repo)
 - **狀態**: 比 origin/main 領先 17 個 commit，工作目錄乾淨
-
-### 領先的 Commits 分析
-```
-c6a3b77 (HEAD -> main, myfork/main) feat(cli): CLI
-12898e2 merge: 合并上游 origin/main 的最新改动
-064a566 fix(daemon): 提升機器人優雅關閉流程
-a03a9b5 Merge remote-tracking branch 'origin/main'
-8ee3328 fix(strategy): 強化網格訂單量驗證與閾值管理
-9c2852b Merge latest changes from origin/main (resolved conflicts in perp_grid_strategy.py)
-6dbbedb Merge remote-tracking branch 'origin/main'
-8414d8d fix(daemon): 修復SSH斷開後日誌停止更新的問題
-7aa347c chore: 添加 .venv 目录到 .gitignore
-c7b1277 docs: 完善文档和监控功能
-53aafa0 refactor: 数据库、CLI和服务层更新
-aed66f9 refactor: API客户端和策略功能改进
-d12e064 feat: 新增核心功能模块
-85d9f90 refactor: 项目结构重构和配置管理
-f41306b chore: 清理旧文件和不需要的依赖
-653075c 更新: 添加 time 模組導入和忽略 nohup.out 文件
-4685740 添加健康檢查功能供 Uptime Kuma 監聽
-```
-
 ---
 
 ## 問題識別
