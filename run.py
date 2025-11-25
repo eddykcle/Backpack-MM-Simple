@@ -157,6 +157,14 @@ def start_web_server_in_background():
 
 def main():
     """主函數"""
+    # 在程式啟動時自動清理舊log
+    try:
+        from core.log_manager import cleanup_old_logs
+        cleanup_old_logs()  # 清理超過2天的舊log
+        logger.info("已清理超過2天的舊日誌檔案")
+    except Exception as e:
+        logger.warning(f"清理舊日誌時發生錯誤: {e}")
+    
     args = parse_arguments()
     
     # 驗證重平參數
