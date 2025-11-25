@@ -10,6 +10,8 @@
   "cpu_limit_percent": 80,
   "auto_restart": true,
   "environment": {},
+  "log_cleanup_interval": 86400,
+  "log_retention_days": 2,
   "bot_args": [
     "--exchange",
     "backpack",

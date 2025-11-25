@@ -18,11 +18,11 @@ from datetime import datetime
 # 支持相對導入和絕對導入
 try:
     # 作為模塊導入時使用相對導入
-    from .log_manager import StructuredLogger, ProcessManager, get_logger
+    from .log_manager import StructuredLogger, ProcessManager, get_logger, cleanup_old_logs, _loggers
 except ImportError:
     # 直接運行時使用絕對導入
     sys.path.insert(0, str(Path(__file__).parent.parent))
-    from core.log_manager import StructuredLogger, ProcessManager, get_logger
+    from core.log_manager import StructuredLogger, ProcessManager, get_logger, cleanup_old_logs, _loggers
 
 class TradingBotDaemon:
     """交易機器人守護進程管理器"""
@@ -66,7 +66,9 @@ class TradingBotDaemon:
             "auto_restart": True,
             "environment": {},
             "bot_stop_timeout": 25,
-            "bot_kill_timeout": 5
+            "bot_kill_timeout": 5,
+            "log_cleanup_interval": 86400,  # 日誌清理間隔（秒），默認為24小時
+            "log_retention_days": 2  # 日誌保留天數，默認為2天
         }
         
         if self.config_file.exists():
@@ -98,6 +100,13 @@ class TradingBotDaemon:
     def start(self, daemonize: bool = True) -> bool:
         """啟動守護進程"""
         try:
+            # 清除日誌記錄器緩存，確保使用新的配置
+            _loggers.clear()
+            
+            # 重新創建日誌記錄器
+            self.logger = get_logger("trading_bot_daemon")
+            self.process_manager = ProcessManager(str(self.log_dir))
+            
             # 檢查是否已經在運行
             if self.process_manager.is_running():
                 pid = self.process_manager.get_pid()
@@ -232,6 +241,7 @@ class TradingBotDaemon:
         """主循環，監控和重啟交易機器人"""
         restart_count = 0
         last_restart_time = 0
+        last_log_cleanup_time = time.time()  # 記錄上次日誌清理時間
         
         while self.running:
             try:
@@ -272,6 +282,13 @@ class TradingBotDaemon:
                 
                 # 健康檢查
                 self._health_check()
+                
+                # 檢查是否需要清理日誌
+                current_time = time.time()
+                log_cleanup_interval = self.config.get("log_cleanup_interval", 86400)  # 默認24小時
+                if current_time - last_log_cleanup_time >= log_cleanup_interval:
+                    self._cleanup_logs()
+                    last_log_cleanup_time = current_time
                 
                 # 等待下一個檢查週期
                 time.sleep(self.config.get("health_check_interval", 30))
@@ -429,8 +446,13 @@ class TradingBotDaemon:
             
             # 準備輸出重定向文件（避免使用PIPE導致阻塞）
             # 子進程的stdout/stderr重定向到日誌文件，避免SSH斷開時管道阻塞
-            stdout_log = self.log_dir / "bot_stdout.log"
-            stderr_log = self.log_dir / "bot_stderr.log"
+            # 使用基於時間的目錄結構
+            current_date = datetime.now().strftime('%Y-%m-%d')
+            date_dir = self.log_dir / current_date
+            date_dir.mkdir(exist_ok=True)
+            
+            stdout_log = date_dir / "bot_stdout.log"
+            stderr_log = date_dir / "bot_stderr.log"
             
             # 以追加模式打開日誌文件，確保SSH斷開後仍能正常寫入
             stdout_file = open(stdout_log, 'a', buffering=1)  # 行緩衝
@@ -570,6 +592,24 @@ class TradingBotDaemon:
             
         except Exception as e:
             self.logger.error("健康檢查失敗", error=str(e))
+    
+    def _cleanup_logs(self):
+        """清理舊日誌文件"""
+        try:
+            log_retention_days = self.config.get("log_retention_days", 2)
+            self.logger.info("開始清理舊日誌文件", retention_days=log_retention_days)
+            
+            # 調用日誌清理函數
+            cleanup_old_logs(
+                log_dir=self.config["log_dir"],
+                days_to_keep=log_retention_days,
+                cleanup_root_logs=True
+            )
+            
+            self.logger.info("舊日誌文件清理完成", retention_days=log_retention_days)
+            
+        except Exception as e:
+            self.logger.error("清理舊日誌文件失敗", error=str(e))
 
 def main():
     """主函數"""

@@ -19,6 +19,79 @@ import time
 class CompressedRotatingFileHandler(logging.handlers.RotatingFileHandler):
     """支持壓縮的日誌輪轉處理器"""
     
+    def __init__(self, filename, maxBytes=0, backupCount=0, time_based=False):
+        """初始化輪轉處理器
+        
+        Args:
+            filename: 日誌文件名
+            maxBytes: 最大字節數
+            backupCount: 備份文件數量
+            time_based: 是否啟用基於時間的輪轉（每天一個新文件）
+        """
+        super().__init__(filename, maxBytes=maxBytes, backupCount=backupCount)
+        self.time_based = time_based
+        self.current_date = datetime.now().date()
+        
+        # 如果啟用基於時間的輪轉，修改文件名以包含日期
+        if self.time_based:
+            self.baseFilename = str(self.baseFilename)
+            self.date_filename = f"{self.baseFilename}.{self.current_date.strftime('%Y-%m-%d')}"
+            # 立即使用帶日期的文件名
+            self.baseFilename = self.date_filename
+    
+    def emit(self, record):
+        """發出日誌記錄，檢查是否需要輪轉"""
+        try:
+            # 如果啟用基於時間的輪轉，檢查日期是否變化
+            if self.time_based:
+                today = datetime.now().date()
+                if today != self.current_date:
+                    self._time_based_rollover()
+                    self.current_date = today
+                    # 更新baseFilename為新的日期文件名
+                    self.baseFilename = f"{self.baseFilename.split('.')[0]}.{today.strftime('%Y-%m-%d')}"
+            
+            # 調用父類的emit方法
+            super().emit(record)
+        except Exception:
+            self.handleError(record)
+    
+    def _time_based_rollover(self):
+        """執行基於時間的輪轉"""
+        if self.stream:
+            self.stream.close()
+            self.stream = None
+        
+        # 獲取基礎文件名和日誌目錄
+        base_name = Path(self.baseFilename).name
+        log_dir = Path(self.baseFilename).parent
+        
+        # 壓縮昨天的日誌文件（如果存在）
+        yesterday_date = self.current_date.strftime('%Y-%m-%d')
+        yesterday_dir = log_dir.parent / yesterday_date
+        if yesterday_dir.exists():
+            for log_file in yesterday_dir.glob(f"{base_name}*"):
+                if not log_file.name.endswith('.gz'):
+                    # 壓縮昨天的日誌文件
+                    gz_file = log_file.with_suffix(f"{log_file.suffix}.gz")
+                    with open(log_file, 'rb') as f_in:
+                        with gzip.open(gz_file, 'wb') as f_out:
+                            shutil.copyfileobj(f_in, f_out)
+                    log_file.unlink()
+        
+        # 更新新的日期和目錄
+        self.current_date = datetime.now().date()
+        new_date_str = self.current_date.strftime('%Y-%m-%d')
+        new_dir = log_dir.parent / new_date_str
+        new_dir.mkdir(exist_ok=True)
+        
+        # 更新文件路徑
+        self.baseFilename = str(new_dir / base_name)
+        
+        # 重新打開日誌文件
+        self.mode = 'a'  # 追加模式
+        self.stream = self._open()
+    
     def doRollover(self):
         """執行日誌輪轉並壓縮舊文件"""
         if self.stream:
@@ -129,11 +202,17 @@ class StructuredLogger:
     def _setup_handlers(self, max_bytes: int, backup_count: int):
         """設置各種日誌處理器"""
         
-        # 1. 主要日誌文件（所有級別）
+        # 獲取當前日期並創建日期目錄
+        current_date = datetime.now().strftime('%Y-%m-%d')
+        date_dir = self.log_dir / current_date
+        date_dir.mkdir(exist_ok=True)
+        
+        # 1. 主要日誌文件（所有級別）- 使用基於時間的輪轉
         main_handler = CompressedRotatingFileHandler(
-            self.log_dir / f"{self.name}.log",
+            date_dir / f"{self.name}.log",
             maxBytes=max_bytes,
-            backupCount=backup_count
+            backupCount=backup_count,
+            time_based=True  # 啟用基於時間的輪轉
         )
         main_handler.setLevel(logging.DEBUG)
         main_formatter = logging.Formatter(
@@ -143,11 +222,12 @@ class StructuredLogger:
         main_handler.setFormatter(main_formatter)
         self.logger.addHandler(main_handler)
         
-        # 2. 錯誤日誌文件（只包含ERROR及以上）
+        # 2. 錯誤日誌文件（只包含ERROR及以上）- 使用基於時間的輪轉
         error_handler = CompressedRotatingFileHandler(
-            self.log_dir / f"{self.name}_errors.log",
+            date_dir / f"{self.name}_errors.log",
             maxBytes=max_bytes // 2,
-            backupCount=backup_count
+            backupCount=backup_count,
+            time_based=True  # 啟用基於時間的輪轉
         )
         error_handler.setLevel(logging.ERROR)
         error_formatter = logging.Formatter(
@@ -157,11 +237,12 @@ class StructuredLogger:
         error_handler.setFormatter(error_formatter)
         self.logger.addHandler(error_handler)
         
-        # 3. 結構化JSON日誌（便於程序解析）
+        # 3. 結構化JSON日誌（便於程序解析）- 使用基於時間的輪轉
         json_handler = CompressedRotatingFileHandler(
-            self.log_dir / f"{self.name}_structured.log",
+            date_dir / f"{self.name}_structured.log",
             maxBytes=max_bytes,
-            backupCount=backup_count
+            backupCount=backup_count,
+            time_based=True  # 啟用基於時間的輪轉
         )
         json_handler.setLevel(logging.INFO)
         json_formatter = logging.Formatter('%(message)s')  # 純JSON格式
@@ -449,14 +530,17 @@ def cleanup_old_logs(log_dir: str = "logs", days_to_keep: int = 2, cleanup_root_
     import glob
     from datetime import datetime, timedelta
     
+    # 獲取日誌記錄器
+    logger = get_logger("log_cleanup")
+    
     # 清理指定日誌目錄
-    _cleanup_log_directory(log_dir, days_to_keep)
+    _cleanup_log_directory(log_dir, days_to_keep, logger)
     
     # 清理根目錄的log檔案
     if cleanup_root_logs:
-        _cleanup_root_logs(days_to_keep)
+        _cleanup_root_logs(days_to_keep, logger)
 
-def _cleanup_log_directory(log_dir: str, days_to_keep: int):
+def _cleanup_log_directory(log_dir: str, days_to_keep: int, logger):
     """清理指定目錄的日誌檔案"""
     import glob
     from datetime import datetime, timedelta
@@ -468,23 +552,111 @@ def _cleanup_log_directory(log_dir: str, days_to_keep: int):
     cutoff_date = datetime.now() - timedelta(days=days_to_keep)
     cleaned_count = 0
     
-    # 清理所有.log和.gz文件
+    # 清理所有.log和.gz文件，但跳過當前正在使用的日誌文件
+    current_log_files = set()
+    current_date_dirs = set()
+    
+    # 獲取所有已知的當前日誌文件和日期目錄
+    for logger_name in _loggers:
+        if _loggers[logger_name].logger.handlers:
+            for handler in _loggers[logger_name].logger.handlers:
+                if hasattr(handler, 'baseFilename'):
+                    file_path = Path(handler.baseFilename)
+                    current_log_files.add(file_path.name)
+                    # 添加當前日期目錄到保護列表
+                    if file_path.parent.name and file_path.parent.name.count('-') == 2:  # YYYY-MM-DD格式
+                        current_date_dirs.add(file_path.parent.name)
+    
+    # 添加當前日期到保護列表
+    current_date_dirs.add(datetime.now().strftime('%Y-%m-%d'))
+    
+    # 首先清理日期目錄中的舊日誌
+    for date_dir in log_path.iterdir():
+        if not date_dir.is_dir() or not date_dir.name.count('-') == 2:  # 不是YYYY-MM-DD格式
+            continue
+            
+        # 跳過當前日期目錄
+        if date_dir.name in current_date_dirs:
+            logger.debug("跳過當前日期目錄", date_dir=str(date_dir))
+            continue
+            
+        try:
+            # 嘗試解析目錄名中的日期
+            dir_date = datetime.strptime(date_dir.name, '%Y-%m-%d').date()
+            dir_datetime = datetime.combine(dir_date, datetime.min.time())
+            
+            if dir_datetime < cutoff_date:
+                # 整個目錄都超過保留期限，刪除整個目錄
+                import shutil
+                shutil.rmtree(date_dir)
+                logger.info("刪除舊日誌目錄", directory=str(date_dir))
+                cleaned_count += 1
+            else:
+                # 目錄在保留期限內，但可能需要清理其中的舊文件
+                for file_path in date_dir.glob('*'):
+                    try:
+                        # 跳過當前正在使用的日誌文件
+                        if file_path.name in current_log_files:
+                            logger.debug("跳過當前使用的日誌文件", file_path=str(file_path))
+                            continue
+                            
+                        # 壓縮舊的日誌文件
+                        if file_path.suffix == '.log' and not file_path.name.endswith('.gz'):
+                            gz_file = file_path.with_suffix(f"{file_path.suffix}.gz")
+                            if not gz_file.exists():
+                                with open(file_path, 'rb') as f_in:
+                                    with gzip.open(gz_file, 'wb') as f_out:
+                                        shutil.copyfileobj(f_in, f_out)
+                                file_path.unlink()
+                                logger.info("壓縮日誌文件", file_path=str(file_path))
+                    except Exception as e:
+                        logger.error("處理日誌文件失敗", file_path=str(file_path), error=str(e))
+        except ValueError:
+            # 如果目錄名不是有效的日期，跳過
+            continue
+    
+    # 清理根目錄下的舊日誌文件（兼容舊版本）
     for pattern in ['*.log', '*.log.*', '*.gz']:
         for file_path in log_path.glob(pattern):
             try:
-                # 獲取文件修改時間
-                mtime = datetime.fromtimestamp(file_path.stat().st_mtime)
-                if mtime < cutoff_date:
-                    file_path.unlink()
-                    print(f"刪除舊日誌文件: {file_path}")
-                    cleaned_count += 1
+                # 跳過當前正在使用的日誌文件
+                if file_path.name in current_log_files:
+                    logger.debug("跳過當前使用的日誌文件", file_path=str(file_path))
+                    continue
+                
+                # 對於基於日期的日誌文件，從文件名中提取日期
+                if '.log.' in file_path.name and any(char.isdigit() for char in file_path.name):
+                    # 嘗試從文件名中提取日期 (格式: filename.YYYY-MM-DD)
+                    try:
+                        date_part = file_path.name.split('.')[-2]  # 獲取日期部分
+                        file_date = datetime.strptime(date_part, '%Y-%m-%d').date()
+                        file_datetime = datetime.combine(file_date, datetime.min.time())
+                        
+                        if file_datetime < cutoff_date:
+                            file_path.unlink()
+                            logger.info("刪除舊日誌文件", file_path=str(file_path))
+                            cleaned_count += 1
+                    except (ValueError, IndexError):
+                        # 如果無法解析日期，回退到使用文件修改時間
+                        mtime = datetime.fromtimestamp(file_path.stat().st_mtime)
+                        if mtime < cutoff_date:
+                            file_path.unlink()
+                            logger.info("刪除舊日誌文件", file_path=str(file_path))
+                            cleaned_count += 1
+                else:
+                    # 對於其他文件，使用文件修改時間
+                    mtime = datetime.fromtimestamp(file_path.stat().st_mtime)
+                    if mtime < cutoff_date:
+                        file_path.unlink()
+                        logger.info("刪除舊日誌文件", file_path=str(file_path))
+                        cleaned_count += 1
             except Exception as e:
-                print(f"刪除文件失敗 {file_path}: {e}")
+                logger.error("刪除文件失敗", file_path=str(file_path), error=str(e))
     
     if cleaned_count > 0:
-        print(f"已清理 {log_dir} 目錄下的 {cleaned_count} 個舊日誌文件")
+        logger.info("已清理日誌目錄下的舊日誌文件", directory=log_dir, count=cleaned_count)
 
-def _cleanup_root_logs(days_to_keep: int):
+def _cleanup_root_logs(days_to_keep: int, logger):
     """清理根目錄的日誌檔案"""
     from datetime import datetime, timedelta
     
@@ -508,8 +680,8 @@ def _cleanup_root_logs(days_to_keep: int):
     for pattern in root_log_patterns:
         for file_path in root_path.glob(pattern):
             # 跳過排除的檔案和目錄
-            if (file_path.name in exclude_files or 
-                file_path.is_dir() or 
+            if (file_path.name in exclude_files or
+                file_path.is_dir() or
                 str(file_path).startswith('./logs/')):
                 continue
                 
@@ -520,15 +692,15 @@ def _cleanup_root_logs(days_to_keep: int):
                     # 額外安全檢查：確保這真的是log檔案
                     if _is_safe_to_delete_log(file_path):
                         file_path.unlink()
-                        print(f"刪除根目錄舊日誌文件: {file_path}")
+                        logger.info("刪除根目錄舊日誌文件", file_path=str(file_path))
                         cleaned_count += 1
                     else:
-                        print(f"跳過非日誌文件: {file_path}")
+                        logger.info("跳過非日誌文件", file_path=str(file_path))
             except Exception as e:
-                print(f"刪除根目錄文件失敗 {file_path}: {e}")
+                logger.error("刪除根目錄文件失敗", file_path=str(file_path), error=str(e))
     
     if cleaned_count > 0:
-        print(f"已清理根目錄下的 {cleaned_count} 個舊日誌文件")
+        logger.info("已清理根目錄下的舊日誌文件", count=cleaned_count)
 
 def _is_safe_to_delete_log(file_path: Path) -> bool:
     """檢查檔案是否安全刪除（確保是log檔案）"""

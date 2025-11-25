@@ -52,22 +52,43 @@
 #### 主要特性
 
 - **結構化日誌**: 支持JSON格式的結構化日誌，便於程序解析
-- **日誌輪轉**: 自動輪轉日誌文件，防止無限增長
+- **基於時間的輪轉**: 每天自動創建新的日誌目錄，按日期組織日誌文件
 - **壓縮存儲**: 自動壓縮舊的日誌文件，節省磁盤空間
 - **多級別分類**: 分離一般日誌、錯誤日誌和結構化日誌
 - **異步寫入**: 避免日誌寫入阻塞主線程
-- **自動清理**: 定期清理超過指定天數的舊日誌
+- **自動清理**: 定期清理超過指定天數的舊日誌目錄
+- **日期目錄結構**: 每天的日誌都保存在獨立的日期目錄中
 
 #### 日誌文件結構
 
 ```
 logs/
-├── trading_bot.log              # 主要日誌文件
-├── trading_bot_errors.log       # 錯誤日誌
-├── trading_bot_structured.log   # 結構化日誌
-├── stdout.log                   # 標準輸出
-├── stderr.log                   # 標準錯誤
-└── process.pid                  # 進程PID文件
+├── 2025-11-25/                   # 今天的日誌目錄
+│   ├── trading_bot.log           # 主要日誌文件
+│   ├── trading_bot_errors.log    # 錯誤日誌
+│   ├── trading_bot_structured.log # 結構化日誌
+│   ├── bot_stdout.log            # 標準輸出
+│   └── bot_stderr.log            # 標準錯誤
+├── 2025-11-24/                   # 昨天的日誌目錄（已壓縮）
+│   ├── trading_bot.log.gz
+│   ├── trading_bot_errors.log.gz
+│   └── ...
+└── process.pid                   # 進程PID文件
+```
+
+#### 日誌清理系統
+
+系統會自動清理超過指定天數的舊日誌目錄（默認2天）：
+
+- **清理間隔**: 每24小時檢查一次
+- **保留天數**: 默認保留最近2天的日誌
+- **壓縮策略**: 自動壓縮非當前日期的日誌文件
+- **保護機制**: 不會刪除正在使用的日誌文件
+- **記錄追蹤**: 所有清理操作都會記錄到結構化日誌中
+
+清理日誌示例：
+```
+22:00:00 - INFO - {"timestamp": "2025-11-25T22:00:00", "level": "INFO", "logger": "trading_bot_daemon", "message": "已清理超過2天的舊日誌檔案", "data": {"deleted_dirs": 1, "freed_space_mb": 15.2}}
 ```
 
 ### 2. 進程守護管理 (`core/daemon_manager.py`)
@@ -357,6 +378,8 @@ monitor._create_alert(
   "cpu_limit_percent": 80,
   "auto_restart": true,
   "environment": {},
+  "log_cleanup_interval": 86400,
+  "log_retention_days": 2,
   "bot_args": ["--exchange", "backpack", "--symbol", "SOL_USDC"]
 }
 ```
@@ -374,7 +397,29 @@ monitor._create_alert(
 - `cpu_limit_percent`: CPU使用率限制（%）
 - `auto_restart`: 是否自動重啟
 - `environment`: 環境變量
+- `log_cleanup_interval`: 日誌清理間隔（秒，默認86400即24小時）
+- `log_retention_days`: 日誌保留天數（默認2天）
 - `bot_args`: 傳遞給腳本的參數
+
+### 日誌清理配置
+
+日誌清理系統通過以下配置項控制：
+
+```json
+{
+  "log_cleanup_interval": 86400,
+  "log_retention_days": 2
+}
+```
+
+- `log_cleanup_interval`: 日誌清理檢查間隔（秒）
+  - 設置為 86400 表示每24小時檢查一次
+  - 可以根據需要調整檢查頻率
+  
+- `log_retention_days`: 日誌保留天數
+  - 設置為 2 表示保留最近2天的日誌
+  - 超過此天數的日誌目錄會被自動清理
+  - 建議根據磁盤空間和調試需求調整
 
 ---
 
@@ -432,7 +477,56 @@ ps -p <PID>
 # 應該能看到進程仍在運行
 
 # 7. 查看日誌
-tail -f logs/trading_bot.log
+tail -f logs/$(date +%Y-%m-%d)/trading_bot.log
+```
+
+### 方法四：驗證日誌清理系統
+
+```bash
+# 1. 啟動守護進程
+.venv/bin/python3 core/daemon_manager.py start --daemon
+
+# 2. 檢查日誌目錄結構
+ls -la logs/
+# 應該看到按日期組織的目錄結構
+
+# 3. 創建測試的舊日誌目錄（用於測試清理功能）
+mkdir -p "logs/$(date -d '3 days ago' +%Y-%m-%d)"
+echo "test old log" > "logs/$(date -d '3 days ago' +%Y-%m-%d)/test.log"
+
+# 4. 臨時修改配置文件，將保留天數設為1天
+sed -i 's/"log_retention_days": 2/"log_retention_days": 1/' config/daemon_config.json
+
+# 5. 重啟守護進程以應用新配置
+.venv/bin/python3 core/daemon_manager.py restart
+
+# 6. 等待清理執行（或手動觸發檢查）
+sleep 5
+
+# 7. 檢查舊日誌是否被清理
+ls -la logs/
+# 3天前的日誌目錄應該已被清理
+
+# 8. 恢復原始配置
+sed -i 's/"log_retention_days": 1/"log_retention_days": 2/' config/daemon_config.json
+
+# 9. 查看清理日誌
+grep "已清理超過" logs/$(date +%Y-%m-%d)/trading_bot_structured.log
+```
+
+### 方法五：驗證日誌輪轉和壓縮
+
+```bash
+# 1. 啟動守護進程
+.venv/bin/python3 core/daemon_manager.py start --daemon
+
+# 2. 檢查當前日誌目錄
+ls -la logs/$(date +%Y-%m-%d)/
+
+# 3. 等待到第二天（或模擬日期變更）
+# 4. 檢查昨天的日誌是否被壓縮
+ls -la logs/$(date -d 'yesterday' +%Y-%m-%d)/
+# 應該看到 .gz 擴展名的壓縮文件
 ```
 
 ### 方法三：使用 screen/tmux 對比
@@ -530,8 +624,55 @@ rm logs/process.pid
 
 ### 問題：日誌文件過大
 
-- 系統會自動輪轉和壓縮日誌文件
-- 可以手動運行 `cleanup_old_logs()` 清理舊日誌
+- 系統會自動按日期組織日誌文件，每天創建新目錄
+- 自動壓縮非當前日期的日誌文件
+- 自動清理超過保留天數的舊日誌目錄（默認2天）
+- 可以通過調整 `log_retention_days` 配置項來改變保留策略
+
+### 問題：日誌清理未執行
+
+**可能原因：**
+1. 守護進程未啟動或已停止
+2. 配置文件中的 `log_cleanup_interval` 設置過大
+3. 沒有超過保留天數的日誌目錄
+
+**解決方法：**
+```bash
+# 1. 檢查守護進程狀態
+.venv/bin/python3 core/daemon_manager.py status
+
+# 2. 查看結構化日誌中的清理記錄
+grep "已清理超過" logs/$(date +%Y-%m-%d)/trading_bot_structured.log
+
+# 3. 手動觸發日誌清理（重啟守護進程）
+.venv/bin/python3 core/daemon_manager.py restart
+
+# 4. 檢查配置文件
+cat config/daemon_config.json | grep -E "(log_cleanup_interval|log_retention_days)"
+```
+
+### 問題：日誌目錄結構混亂
+
+**正常結構：**
+```
+logs/
+├── 2025-11-25/    # 今天的日誌
+├── 2025-11-24/    # 昨天的日誌
+└── process.pid    # PID文件
+```
+
+**如果發現舊的日誌文件直接在logs目錄下：**
+```bash
+# 1. 停止守護進程
+.venv/bin/python3 core/daemon_manager.py stop
+
+# 2. 手動整理舊日誌（可選）
+mkdir -p logs/legacy
+mv logs/*.log logs/legacy/ 2>/dev/null || true
+
+# 3. 重新啟動守護進程
+.venv/bin/python3 core/daemon_manager.py start --daemon
+```
 
 ### 問題：進程無法啟動
 
@@ -889,7 +1030,7 @@ git checkout upstream/main -- path/to/file
 
 ## 更新日誌和未來計劃
 
-### v1.0.0 (當前版本)
+### v1.1.0 (當前版本)
 
 - 實現基礎的日誌管理系統
 - 添加進程守護功能
@@ -897,6 +1038,22 @@ git checkout upstream/main -- path/to/file
 - 支持多種通知方式
 - 提供完整的配置文件支持
 - 支持SSH斷開後繼續運行
+- **新增**: 基於時間的日誌輪轉系統
+- **新增**: 日期目錄結構組織（logs/YYYY-MM-DD/）
+- **新增**: 自動日誌清理功能（可配置保留天數）
+- **新增**: 日誌文件自動壓縮
+- **新增**: 守護進程集成日誌清理調度
+- **新增**: 完整的日誌清理文檔和故障排除指南
+
+### v1.0.0
+
+- 初始版本發布
+- 基礎的日誌管理系統
+- 進程守護功能
+- 系統監控和告警
+- 多種通知方式支持
+- 完整的配置文件支持
+- SSH斷開後繼續運行支持
 
 ### 未來計劃
 

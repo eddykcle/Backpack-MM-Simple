@@ -19,7 +19,7 @@ DB_PATH = os.getenv('DB_PATH', 'orders.db')
 ENABLE_DATABASE = os.getenv('ENABLE_DATABASE', '0').strip().lower() in {"1", "true", "yes", "on"}
 
 # 日誌配置
-LOG_FILE = os.getenv('LOG_FILE', 'market_maker.log')
+LOG_FILE = os.getenv('LOG_FILE', 'logs/market_maker.log')
 
 # ==================== Backpack 交易所配置 ====================
 
