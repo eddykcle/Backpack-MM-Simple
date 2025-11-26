@@ -13,6 +13,10 @@ import socket
 from typing import Optional, Dict, Any
 from datetime import datetime
 
+# 添加輸入驗證模組
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from utils.input_validation import WebApiValidator, ValidationError
+
 # 添加父目錄到路徑以導入項目模組
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -400,13 +404,36 @@ def adjust_grid_range():
 
     try:
         data = request.json or {}
+        
+        # 輸入驗證
+        validator = WebApiValidator()
+        is_valid, errors = validator.validate(data)
+        
+        if not is_valid:
+            # 格式化錯誤信息
+            error_messages = []
+            for field, field_errors in errors.items():
+                if field == "general":
+                    error_messages.extend(field_errors)
+                else:
+                    for error in field_errors:
+                        error_messages.append(f"{field}: {error}")
+            
+            logger.warning(f"網格調整請求驗證失敗: {error_messages}")
+            return jsonify({
+                'success': False,
+                'message': '輸入驗證失敗: ' + '; '.join(error_messages)
+            }), 400
+
+        # 類型轉換（驗證通過後）
         upper_raw = data.get('grid_upper_price')
         lower_raw = data.get('grid_lower_price')
 
         new_upper = float(upper_raw) if upper_raw is not None else None
         new_lower = float(lower_raw) if lower_raw is not None else None
 
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as e:
+        logger.error(f"網格調整參數類型轉換失敗: {e}")
         return jsonify({'success': False, 'message': '網格上下限必須為數值'}), 400
 
     if new_lower is None and new_upper is None:
@@ -1049,6 +1076,42 @@ def run_server(host='0.0.0.0', port=5000, debug=False):
     logger.info(f"調試模式: {'開啟' if debug else '關閉'}")
     socketio.run(app, host=host, port=port, debug=debug, allow_unsafe_werkzeug=True)
 
+
+@app.errorhandler(ValidationError)
+def handle_validation_error(error):
+    """處理驗證錯誤"""
+    logger.error(f"驗證錯誤: {str(error)}")
+    return jsonify({
+        'success': False,
+        'message': f'驗證錯誤: {str(error)}'
+    }), 400
+
+@app.errorhandler(400)
+def handle_bad_request(error):
+    """處理錯誤請求"""
+    logger.warning(f"錯誤請求: {str(error)}")
+    return jsonify({
+        'success': False,
+        'message': '請求格式錯誤'
+    }), 400
+
+@app.errorhandler(404)
+def handle_not_found(error):
+    """處理資源未找到"""
+    logger.warning(f"資源未找到: {str(error)}")
+    return jsonify({
+        'success': False,
+        'message': '請求的資源不存在'
+    }), 404
+
+@app.errorhandler(500)
+def handle_internal_error(error):
+    """處理內部服務器錯誤"""
+    logger.error(f"內部服務器錯誤: {str(error)}")
+    return jsonify({
+        'success': False,
+        'message': '內部服務器錯誤'
+    }), 500
 
 if __name__ == '__main__':
     run_server()

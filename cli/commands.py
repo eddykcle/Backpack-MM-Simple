@@ -941,6 +941,7 @@ def grid_adjust_command():
     lower_input = input("新的網格下限價格 (留空沿用當前設定): ").strip()
     upper_input = input("新的網格上限價格 (留空沿用當前設定): ").strip()
 
+    # 構建請求負載
     payload = {}
     try:
         if lower_input:

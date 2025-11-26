@@ -13,6 +13,7 @@ from typing import Dict, List, Optional, Tuple, Any
 from core.logger import setup_logger
 from strategies.market_maker import MarketMaker, format_balance
 from utils.helpers import round_to_precision, round_to_tick_size
+from utils.input_validation import StrategyValidator
 
 logger = setup_logger("grid_strategy")
 
@@ -881,6 +882,26 @@ class GridStrategy(MarketMaker):
 
             if new_lower_price is None and new_upper_price is None:
                 logger.error("未提供新的網格上下限，調整已取消")
+                return False
+
+            # 準備驗證數據
+            validation_data = {
+                'grid_lower_price': new_lower_price,
+                'grid_upper_price': new_upper_price,
+                'current_lower': self.grid_lower_price,
+                'current_upper': self.grid_upper_price,
+                'tick_size': self.tick_size
+            }
+
+            # 使用策略驗證器進行輸入驗證
+            validator = StrategyValidator()
+            is_valid, errors = validator.validate_grid_adjustment(validation_data)
+
+            if not is_valid:
+                logger.error("網格範圍調整驗證失敗:")
+                for field, error_messages in errors.items():
+                    for error_msg in error_messages:
+                        logger.error(f"  - {error_msg}")
                 return False
 
             target_lower = (
