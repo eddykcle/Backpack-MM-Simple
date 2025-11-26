@@ -10,7 +10,7 @@ import argparse
 import subprocess
 import atexit
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import json
 import psutil
 from datetime import datetime
@@ -29,6 +29,8 @@ class TradingBotDaemon:
     
     def __init__(self, config_file: str = "config/daemon_config.json"):
         self.config_file = Path(config_file)
+        # 檢查是否為新的多配置格式
+        self.is_multi_config = self._is_multi_config_format(config_file)
         self.log_dir = Path("logs")
         self.log_dir.mkdir(exist_ok=True)
         
@@ -51,8 +53,25 @@ class TradingBotDaemon:
         # 註冊退出時的清理函數
         atexit.register(self._cleanup_bot_process)
     
+    def _is_multi_config_format(self, config_file: str) -> bool:
+        """檢查是否為新的多配置格式"""
+        try:
+            with open(config_file, 'r') as f:
+                config_data = json.load(f)
+                # 新格式包含 metadata, daemon_config, exchange_config, strategy_config
+                return all(key in config_data for key in ["metadata", "daemon_config", "exchange_config", "strategy_config"])
+        except:
+            return False
+    
     def load_config(self) -> Dict[str, Any]:
         """載入配置文件"""
+        if self.is_multi_config:
+            return self._load_multi_config()
+        else:
+            return self._load_legacy_config()
+    
+    def _load_legacy_config(self) -> Dict[str, Any]:
+        """載入傳統配置格式"""
         default_config = {
             "python_path": sys.executable,
             "script_path": "run.py",
@@ -77,11 +96,131 @@ class TradingBotDaemon:
                     loaded_config = json.load(f)
                     # 合併配置
                     default_config.update(loaded_config)
-                    self.logger.info("配置已載入", config_file=str(self.config_file))
+                    self.logger.info("傳統配置已載入", config_file=str(self.config_file))
             except Exception as e:
-                self.logger.error("載入配置文件失敗，使用默認配置", error=str(e))
+                self.logger.error("載入傳統配置文件失敗，使用默認配置", error=str(e))
         
         return default_config
+    
+    def _load_multi_config(self) -> Dict[str, Any]:
+        """載入新的多配置格式"""
+        try:
+            # 導入配置管理器
+            from core.config_manager import ConfigManager
+            config_manager = ConfigManager()
+            
+            # 加載配置文件
+            config_data = config_manager.load_config(self.config_file, expand_vars=True)
+            
+            # 驗證配置
+            validation_result = config_manager.validate_config(config_data)
+            if not validation_result.is_valid:
+                self.logger.error("配置驗證失敗:")
+                for error in validation_result.errors:
+                    self.logger.error(f"  - {error}")
+                raise ValueError("配置驗證失敗")
+            
+            if validation_result.warnings:
+                self.logger.warning("配置驗證警告:")
+                for warning in validation_result.warnings:
+                    self.logger.warning(f"  - {warning}")
+            
+            # 提取守護進程配置
+            daemon_config = config_data.get("daemon_config", {})
+            exchange_config = config_data.get("exchange_config", {})
+            strategy_config = config_data.get("strategy_config", {})
+            metadata = config_data.get("metadata", {})
+            
+            # 構建 bot_args
+            bot_args = self._build_bot_args(metadata, strategy_config)
+            
+            # 合併配置
+            final_config = {
+                "python_path": daemon_config.get("python_path", sys.executable),
+                "script_path": daemon_config.get("script_path", "run.py"),
+                "working_dir": daemon_config.get("working_dir", str(Path.cwd())),
+                "log_dir": daemon_config.get("log_dir", str(self.log_dir)),
+                "max_restart_attempts": daemon_config.get("max_restart_attempts", 3),
+                "restart_delay": daemon_config.get("restart_delay", 60),
+                "health_check_interval": daemon_config.get("health_check_interval", 30),
+                "memory_limit_mb": daemon_config.get("memory_limit_mb", 2048),
+                "cpu_limit_percent": daemon_config.get("cpu_limit_percent", 80),
+                "auto_restart": daemon_config.get("auto_restart", True),
+                "environment": exchange_config,
+                "bot_stop_timeout": 25,
+                "bot_kill_timeout": 5,
+                "log_cleanup_interval": daemon_config.get("log_cleanup_interval", 86400),
+                "log_retention_days": daemon_config.get("log_retention_days", 2),
+                "bot_args": bot_args
+            }
+            
+            self.logger.info("多配置格式已載入",
+                          config_file=str(self.config_file),
+                          exchange=metadata.get("exchange"),
+                          symbol=metadata.get("symbol"),
+                          strategy=metadata.get("strategy"))
+            
+            return final_config
+            
+        except Exception as e:
+            self.logger.error("載入多配置文件失敗，使用默認配置", error=str(e))
+            # 回退到默認配置
+            return self._load_legacy_config()
+    
+    def _build_bot_args(self, metadata: Dict, strategy_config: Dict) -> List[str]:
+        """根據配置構建 bot_args"""
+        args = []
+        
+        # 基本參數
+        args.extend([
+            "--exchange", metadata.get("exchange", "backpack"),
+            "--symbol", metadata.get("symbol", ""),
+            "--strategy", metadata.get("strategy", "standard")
+        ])
+        
+        # 市場類型
+        if metadata.get("market_type"):
+            args.extend(["--market-type", metadata["market_type"]])
+        
+        # 策略特定參數
+        strategy = metadata.get("strategy", "")
+        
+        if strategy in ["grid", "perp_grid"]:
+            # 網格策略參數
+            grid_params = [
+                "grid-upper", "grid-lower", "grid-num", "grid-mode", "grid-type",
+                "max-position", "stop-loss", "take-profit",
+                "boundary-action", "boundary-tolerance", "duration", "interval"
+            ]
+            
+            for param in grid_params:
+                key = param.replace("-", "_")
+                if key in strategy_config:
+                    value = strategy_config[key]
+                    if isinstance(value, bool):
+                        if value:
+                            args.extend([f"--{param}"])
+                    elif param.startswith("enable") and not value:
+                        args.extend([f"--no-{param}"])
+                    elif value is not None:
+                        args.extend([f"--{param}", str(value)])
+        
+        elif strategy in ["standard", "perp_standard", "maker_hedge"]:
+            # 標準策略參數
+            standard_params = [
+                "spread", "quantity", "max-orders", "target-position",
+                "max-position", "position-threshold", "inventory-skew",
+                "stop-loss", "take-profit", "duration", "interval"
+            ]
+            
+            for param in standard_params:
+                key = param.replace("-", "_")
+                if key in strategy_config:
+                    value = strategy_config[key]
+                    if value is not None:
+                        args.extend([f"--{param}", str(value)])
+        
+        return args
     
     def save_config(self):
         """保存配置文件"""
