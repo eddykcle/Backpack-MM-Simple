@@ -7,10 +7,11 @@
 - [] 不同交易所不同trading pair的config，要有一個template
 - [] hyperliquid
 - [] 幾個bot同時進行（不同api key）
-- [] frontend優化，把log放上網站定時更新
+- [] 請問我現在這個repo裡面，有什麼automation testing的功能嗎？
+
 
 ## 計劃 P2
-- [] 請問我現在這個repo裡面，有什麼automation testing的功能嗎？
+- [] frontend優化，把log放上網站定時更新
 
 ## 計劃 P3
 - [] Jenkis
