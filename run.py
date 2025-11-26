@@ -98,6 +98,12 @@ def parse_arguments():
     parser.add_argument('--price-range', type=float, default=5.0, help='自動模式下的價格範圍百分比 (默認: 5.0)')
     parser.add_argument('--grid-mode', choices=['arithmetic', 'geometric'], default='arithmetic', help='網格模式 (arithmetic 或 geometric)')
     parser.add_argument('--grid-type', choices=['neutral', 'long', 'short'], default='neutral', help='永續網格類型 (neutral, long 或 short)')
+    
+    # 網格邊界處理參數
+    parser.add_argument('--boundary-action', choices=['emergency_close', 'adjust_range', 'stop_only'], default='emergency_close', help='網格邊界觸發時的處理方式 (emergency_close, adjust_range, stop_only)')
+    parser.add_argument('--boundary-tolerance', type=float, default=0.001, help='網格邊界觸發的容差 (默認: 0.001 = 0.1%)')
+    parser.add_argument('--enable-boundary-check', action='store_true', default=True, help='啟用網格邊界檢查 (默認: True)')
+    parser.add_argument('--disable-boundary-check', dest='enable_boundary_check', action='store_false', help='禁用網格邊界檢查')
 
     # 數據庫選項
     parser.add_argument('--enable-db', dest='enable_db', action='store_true', help='啟用資料庫寫入功能')
@@ -322,6 +328,9 @@ def main():
                 logger.info(f"  網格模式: {args.grid_mode}")
                 logger.info(f"  網格類型: {args.grid_type}")
                 logger.info(f"  最大持倉量: {args.max_position}")
+                logger.info(f"  邊界處理方式: {args.boundary_action}")
+                logger.info(f"  邊界容差: {args.boundary_tolerance:.3%}")
+                logger.info(f"  邊界檢查: {'啟用' if args.enable_boundary_check else '禁用'}")
                 if args.auto_price:
                     logger.info(f"  自動價格範圍: ±{args.price_range}%")
                 else:
@@ -345,6 +354,9 @@ def main():
                     inventory_skew=args.inventory_skew,
                     stop_loss=args.stop_loss,
                     take_profit=args.take_profit,
+                    boundary_action=args.boundary_action,
+                    boundary_tolerance=args.boundary_tolerance,
+                    enable_boundary_check=args.enable_boundary_check,
                     exchange=exchange,
                     exchange_config=exchange_config,
                     enable_database=args.enable_db
