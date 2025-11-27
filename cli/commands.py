@@ -6,6 +6,8 @@ import os
 from typing import Optional
 from datetime import datetime
 import requests
+import json
+from pathlib import Path
 
 from api.bp_client import BPClient
 from api.aster_client import AsterClient
@@ -1345,6 +1347,516 @@ def market_analysis_command(api_key, secret_key):
         import traceback
         traceback.print_exc()
 
+def config_list_command():
+    """列出所有配置文件"""
+    try:
+        from core.config_manager import ConfigManager
+        config_manager = ConfigManager()
+        
+        print("\n=== 配置文件列表 ===")
+        
+        # 列出模板文件
+        templates = config_manager.list_templates()
+        if templates:
+            print("\n📋 模板文件:")
+            for template in templates:
+                print(f"  - {template}")
+        else:
+            print("\n📋 模板文件: 無")
+        
+        # 列出活躍配置
+        active_configs = config_manager.list_active_configs()
+        if active_configs:
+            print("\n🟢 活躍配置:")
+            for config in active_configs:
+                print(f"  - {config}")
+        else:
+            print("\n🟢 活躍配置: 無")
+        
+        # 列出歸檔配置
+        archived_configs = config_manager.list_archived_configs()
+        if archived_configs:
+            print("\n📦 歸檔配置:")
+            for config in archived_configs:
+                print(f"  - {config}")
+        else:
+            print("\n📦 歸檔配置: 無")
+            
+    except Exception as e:
+        print(f"列出配置文件失敗: {str(e)}")
+
+def config_create_command():
+    """從模板創建新配置"""
+    try:
+        from core.config_manager import ConfigManager
+        config_manager = ConfigManager()
+        
+        print("\n=== 從模板創建配置 ===")
+        
+        # 列出可用模板
+        templates = config_manager.list_templates()
+        if not templates:
+            print("沒有可用的模板文件")
+            return
+        
+        print("\n可用模板:")
+        for i, template in enumerate(templates, 1):
+            print(f"{i}. {template}")
+        
+        # 選擇模板
+        while True:
+            try:
+                choice = input(f"\n請選擇模板 (1-{len(templates)}): ").strip()
+                if not choice:
+                    return
+                
+                template_index = int(choice) - 1
+                if 0 <= template_index < len(templates):
+                    selected_template = templates[template_index]
+                    break
+                else:
+                    print("無效選擇，請重新輸入")
+            except ValueError:
+                print("請輸入有效數字")
+        
+        # 輸入配置參數
+        print(f"\n使用模板: {selected_template}")
+        print("請輸入配置參數:")
+        
+        params = {}
+        
+        # 基本參數
+        params['exchange'] = input("交易所 (backpack/aster/paradex/lighter): ").strip().lower()
+        params['symbol'] = input("交易對 (例如: SOL_USDC): ").strip().upper()
+        params['market_type'] = input("市場類型 (spot/perp): ").strip().lower()
+        params['strategy'] = input("策略 (standard/grid/maker_hedge): ").strip().lower()
+        
+        # API 密鑰
+        print("\nAPI 密鑰配置 (留空使用環境變量):")
+        api_key = input(f"{params['exchange'].upper()}_API_KEY: ").strip()
+        secret_key = input(f"{params['exchange'].upper()}_SECRET_KEY: ").strip()
+        
+        if api_key:
+            params['api_key'] = api_key
+        if secret_key:
+            params['secret_key'] = secret_key
+        
+        # 策略特定參數
+        if params['strategy'] == 'grid':
+            print("\n網格策略參數:")
+            try:
+                params['grid_upper'] = float(input("網格上限價格: ") or "0")
+                params['grid_lower'] = float(input("網格下限價格: ") or "0")
+                params['grid_num'] = int(input("網格數量: ") or "10")
+                params['grid_mode'] = input("網格模式 (arithmetic/geometric): ").strip().lower() or "arithmetic"
+                params['order_quantity'] = float(input("訂單數量: ") or "0")
+            except ValueError:
+                print("參數輸入錯誤，將使用默認值")
+        
+        # 創建配置
+        config_name = f"{params['exchange']}_{params['symbol']}_{params['market_type']}_{params['strategy']}.json"
+        
+        try:
+            config_path = config_manager.create_config_from_template(
+                template_name=selected_template,
+                output_name=config_name,
+                **params
+            )
+            
+            print(f"\n✅ 配置文件已創建: {config_path}")
+            print(f"配置名稱: {config_name}")
+            
+            # 驗證配置
+            validation_result = config_manager.validate_config_file(config_path)
+            if validation_result.is_valid:
+                print("✅ 配置驗證通過")
+            else:
+                print("⚠️ 配置驗證失敗:")
+                for error in validation_result.errors:
+                    print(f"  - {error}")
+            
+        except Exception as e:
+            print(f"創建配置失敗: {str(e)}")
+            
+    except Exception as e:
+        print(f"創建配置失敗: {str(e)}")
+
+def config_validate_command():
+    """驗證配置文件"""
+    try:
+        from core.config_manager import ConfigManager
+        config_manager = ConfigManager()
+        
+        print("\n=== 驗證配置文件 ===")
+        
+        # 選擇配置文件
+        config_file = input("請輸入配置文件路徑或名稱: ").strip()
+        if not config_file:
+            print("未輸入配置文件")
+            return
+        
+        # 如果只輸入文件名，嘗試在活躍配置目錄中查找
+        if not os.path.exists(config_file):
+            active_config_path = Path("config/active") / config_file
+            if active_config_path.exists():
+                config_file = str(active_config_path)
+            else:
+                print(f"配置文件不存在: {config_file}")
+                return
+        
+        # 驗證配置
+        validation_result = config_manager.validate_config_file(config_file)
+        
+        if validation_result.is_valid:
+            print(f"✅ 配置文件驗證通過: {config_file}")
+        else:
+            print(f"❌ 配置文件驗證失敗: {config_file}")
+            print("\n錯誤列表:")
+            for error in validation_result.errors:
+                print(f"  - {error}")
+        
+        if validation_result.warnings:
+            print("\n警告列表:")
+            for warning in validation_result.warnings:
+                print(f"  - {warning}")
+                
+    except Exception as e:
+        print(f"驗證配置文件失敗: {str(e)}")
+
+def config_run_command():
+    """使用指定配置運行交易機器人"""
+    try:
+        from core.config_manager import ConfigManager
+        config_manager = ConfigManager()
+        
+        print("\n=== 使用配置運行交易機器人 ===")
+        
+        # 選擇配置文件
+        config_file = input("請輸入配置文件路徑或名稱: ").strip()
+        if not config_file:
+            print("未輸入配置文件")
+            return
+        
+        # 如果只輸入文件名，嘗試在活躍配置目錄中查找
+        if not os.path.exists(config_file):
+            active_config_path = Path("config/active") / config_file
+            if active_config_path.exists():
+                config_file = str(active_config_path)
+            else:
+                print(f"配置文件不存在: {config_file}")
+                return
+        
+        # 驗證配置
+        validation_result = config_manager.validate_config_file(config_file)
+        if not validation_result.is_valid:
+            print("❌ 配置驗證失敗，無法運行")
+            for error in validation_result.errors:
+                print(f"  - {error}")
+            return
+        
+        # 詢問是否以守護進程模式運行
+        daemon_mode = input("是否以守護進程模式運行? (y/n，默認 y): ").strip().lower()
+        daemon_mode = daemon_mode in ['', 'y', 'yes']
+        
+        print(f"\n🚀 使用配置文件啟動交易機器人: {config_file}")
+        print(f"守護進程模式: {'開啟' if daemon_mode else '關閉'}")
+        
+        # 構建啟動命令
+        import subprocess
+        import sys
+        
+        cmd = [
+            sys.executable,
+            "core/daemon_manager.py",
+            "start",
+            "--config", config_file
+        ]
+        
+        if daemon_mode:
+            cmd.append("--daemon")
+        
+        print(f"\n執行命令: {' '.join(cmd)}")
+        
+        # 啟動進程
+        try:
+            result = subprocess.run(cmd, check=True)
+            print("✅ 交易機器人已啟動")
+        except subprocess.CalledProcessError as e:
+            print(f"❌ 啟動失敗: {e}")
+        except KeyboardInterrupt:
+            print("\n⚠️ 用戶中斷啟動")
+            
+    except Exception as e:
+        print(f"運行交易機器人失敗: {str(e)}")
+
+def config_management_command():
+    """配置管理主菜單"""
+    while True:
+        print("\n=== 配置管理 ===")
+        print("1 - 列出所有配置文件")
+        print("2 - 從模板創建新配置")
+        print("3 - 驗證配置文件")
+        print("4 - 使用配置運行交易機器人")
+        print("5 - 高級配置管理")
+        print("6 - 返回主菜單")
+        
+        choice = input("請選擇操作: ").strip()
+        
+        if choice == '1':
+            config_list_command()
+        elif choice == '2':
+            config_create_command()
+        elif choice == '3':
+            config_validate_command()
+        elif choice == '4':
+            config_run_command()
+        elif choice == '5':
+            config_advanced_command()
+        elif choice == '6':
+            break
+        else:
+            print("無效選擇，請重新輸入")
+
+def config_batch_validate_command():
+    """批量驗證配置文件"""
+    try:
+        from core.config_manager import ConfigManager
+        from core.exceptions import ConfigValidationError
+        config_manager = ConfigManager()
+        
+        print("\n=== 批量驗證配置文件 ===")
+        
+        # 獲取所有配置文件
+        all_configs = config_manager.list_configs()
+        
+        if not all_configs:
+            print("沒有找到任何配置文件")
+            return
+        
+        # 篩選選項
+        print("選擇要驗證的配置類型:")
+        print("1 - 所有配置文件")
+        print("2 - 僅活躍配置")
+        print("3 - 僅模板文件")
+        print("4 - 僅歸檔配置")
+        
+        choice = input("請選擇 (1-4): ").strip()
+        
+        if choice == '1':
+            configs_to_validate = all_configs
+        elif choice == '2':
+            configs_to_validate = [c for c in all_configs if c.is_active]
+        elif choice == '3':
+            configs_to_validate = [c for c in all_configs if c.is_template]
+        elif choice == '4':
+            configs_to_validate = [c for c in all_configs if c.is_archived]
+        else:
+            print("無效選擇")
+            return
+        
+        print(f"\n開始驗證 {len(configs_to_validate)} 個配置文件...")
+        
+        valid_count = 0
+        error_count = 0
+        warning_count = 0
+        
+        for config_info in configs_to_validate:
+            try:
+                validation_result = config_manager.validate_config_file(config_info.path)
+                
+                if validation_result.is_valid:
+                    print(f"✅ {config_info.name} - 驗證通過")
+                    valid_count += 1
+                else:
+                    print(f"❌ {config_info.name} - 驗證失敗")
+                    error_count += 1
+                    for error in validation_result.errors:
+                        print(f"    - {error}")
+                
+                if validation_result.warnings:
+                    warning_count += len(validation_result.warnings)
+                    for warning in validation_result.warnings:
+                        print(f"    ⚠️ {warning}")
+                        
+            except ConfigValidationError as e:
+                print(f"❌ {config_info.name} - 驗證異常: {e}")
+                error_count += 1
+            except Exception as e:
+                print(f"❌ {config_info.name} - 未知錯誤: {e}")
+                error_count += 1
+        
+        print(f"\n=== 驗證結果 ===")
+        print(f"總計: {len(configs_to_validate)} 個配置文件")
+        print(f"✅ 通過: {valid_count} 個")
+        print(f"❌ 失敗: {error_count} 個")
+        print(f"⚠️ 警告: {warning_count} 個")
+        
+        if error_count > 0:
+            print(f"\n建議: 修復失敗的配置文件後重新驗證")
+        
+    except Exception as e:
+        print(f"批量驗證失敗: {str(e)}")
+
+def config_batch_backup_command():
+    """批量備份配置文件"""
+    try:
+        from core.config_manager import ConfigManager
+        from core.exceptions import ConfigBackupError
+        config_manager = ConfigManager()
+        
+        print("\n=== 批量備份配置文件 ===")
+        
+        # 獲取活躍配置
+        active_configs = config_manager.list_active_configs()
+        
+        if not active_configs:
+            print("沒有找到活躍配置文件")
+            return
+        
+        print(f"找到 {len(active_configs)} 個活躍配置文件")
+        
+        confirm = input(f"確定要備份所有活躍配置文件嗎? (y/n): ").strip().lower()
+        if confirm not in ['y', 'yes']:
+            print("操作已取消")
+            return
+        
+        print("\n開始批量備份...")
+        
+        success_count = 0
+        error_count = 0
+        
+        for config_name in active_configs:
+            config_path = config_manager.get_config_path(config_name.replace('.json', ''), 'active')
+            
+            try:
+                backup_path = config_manager.backup_config(config_path)
+                if backup_path:
+                    print(f"✅ {config_name} -> {Path(backup_path).name}")
+                    success_count += 1
+                else:
+                    print(f"❌ {config_name} - 備份失敗")
+                    error_count += 1
+            except ConfigBackupError as e:
+                print(f"❌ {config_name} - 備份異常: {e}")
+                error_count += 1
+            except Exception as e:
+                print(f"❌ {config_name} - 未知錯誤: {e}")
+                error_count += 1
+        
+        print(f"\n=== 備份結果 ===")
+        print(f"總計: {len(active_configs)} 個配置文件")
+        print(f"✅ 成功: {success_count} 個")
+        print(f"❌ 失敗: {error_count} 個")
+        
+        if error_count == 0:
+            print("\n🎉 所有配置文件備份成功!")
+        else:
+            print(f"\n⚠️ 有 {error_count} 個配置文件備份失敗，請檢查日誌")
+        
+    except Exception as e:
+        print(f"批量備份失敗: {str(e)}")
+
+def config_batch_cleanup_command():
+    """批量清理舊備份文件"""
+    try:
+        from core.config_manager import ConfigManager
+        config_manager = ConfigManager()
+        
+        print("\n=== 批量清理舊備份文件 ===")
+        
+        # 獲取歸檔配置
+        archived_configs = config_manager.list_archived_configs()
+        
+        if not archived_configs:
+            print("沒有找到歸檔配置文件")
+            return
+        
+        # 篩選備份文件
+        backup_files = [f for f in archived_configs if '_backup_' in f]
+        
+        if not backup_files:
+            print("沒有找到備份文件")
+            return
+        
+        print(f"找到 {len(backup_files)} 個備份文件:")
+        for backup_file in backup_files[:10]:  # 只顯示前10個
+            print(f"  - {backup_file}")
+        
+        if len(backup_files) > 10:
+            print(f"  ... 還有 {len(backup_files) - 10} 個文件")
+        
+        # 詢問保留天數
+        days_input = input("請輸入要保留的天數 (默認 7 天): ").strip()
+        try:
+            keep_days = int(days_input) if days_input else 7
+        except ValueError:
+            print("無效的天數，使用默認值 7 天")
+            keep_days = 7
+        
+        # 計算截止日期
+        from datetime import datetime, timedelta
+        cutoff_date = datetime.now() - timedelta(days=keep_days)
+        
+        print(f"\n將刪除 {keep_days} 天前的備份文件 (早於 {cutoff_date.strftime('%Y-%m-%d %H:%M:%S')})")
+        
+        confirm = input("確定要繼續嗎? (y/n): ").strip().lower()
+        if confirm not in ['y', 'yes']:
+            print("操作已取消")
+            return
+        
+        print("\n開始清理...")
+        
+        deleted_count = 0
+        error_count = 0
+        
+        for backup_file in backup_files:
+            backup_path = config_manager.get_config_path(backup_file.replace('.json', ''), 'archived')
+            
+            try:
+                # 獲取文件修改時間
+                file_mtime = datetime.fromtimestamp(backup_path.stat().st_mtime)
+                
+                if file_mtime < cutoff_date:
+                    backup_path.unlink()
+                    print(f"🗑️ 已刪除: {backup_file}")
+                    deleted_count += 1
+                    
+            except Exception as e:
+                print(f"❌ 刪除失敗 {backup_file}: {e}")
+                error_count += 1
+        
+        print(f"\n=== 清理結果 ===")
+        print(f"🗑️ 已刪除: {deleted_count} 個文件")
+        print(f"❌ 刪除失敗: {error_count} 個文件")
+        
+        if deleted_count > 0:
+            print(f"\n✨ 清理完成，釋放了磁盤空間")
+        
+    except Exception as e:
+        print(f"批量清理失敗: {str(e)}")
+
+def config_advanced_command():
+    """高級配置管理命令"""
+    while True:
+        print("\n=== 高級配置管理 ===")
+        print("1 - 批量驗證配置文件")
+        print("2 - 批量備份配置文件")
+        print("3 - 批量清理舊備份")
+        print("4 - 返回配置管理主菜單")
+        
+        choice = input("請選擇操作: ").strip()
+        
+        if choice == '1':
+            config_batch_validate_command()
+        elif choice == '2':
+            config_batch_backup_command()
+        elif choice == '3':
+            config_batch_cleanup_command()
+        elif choice == '4':
+            break
+        else:
+            print("無效選擇，請重新輸入")
+
 def main_cli(api_key=API_KEY, secret_key=SECRET_KEY, enable_database=ENABLE_DATABASE, exchange='backpack'):
     """主CLI函數"""
     global USE_DATABASE
@@ -1375,7 +1887,8 @@ def main_cli(api_key=API_KEY, secret_key=SECRET_KEY, enable_database=ENABLE_DATA
         print("9 - 重平設置管理")
         db_status = "開啟" if USE_DATABASE else "關閉"
         print(f"10 - 切換資料庫寫入 (目前: {db_status})")
-        print("11 - 退出程序")
+        print("11 - 配置管理")
+        print("12 - 退出程序")
 
         operation = input("請輸入操作類型: ")
 
@@ -1400,6 +1913,8 @@ def main_cli(api_key=API_KEY, secret_key=SECRET_KEY, enable_database=ENABLE_DATA
         elif operation == '10' or operation.lower() == 'd':
             toggle_database_command()
         elif operation == '11':
+            config_management_command()
+        elif operation == '12':
             print("退出程序。")
             break
         else:

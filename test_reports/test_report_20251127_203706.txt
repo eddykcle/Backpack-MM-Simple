@@ -1,0 +1,101 @@
+測試報告 - 2025-11-27 20:37:06
+============================================================
+
+標準輸出:
+----------------------------------------
+============================================================
+運行所有測試
+============================================================
+20:37:06 - INFO - {"timestamp": "2025-11-27T20:37:06.239975", "level": "INFO", "logger": "config_manager", "message": "配置文件已保存: /tmp/tmpub_urjls/active/test_config.json", "module": "log_manager", "function": "log_structured", "line": 302}
+20:37:06 - INFO - {"timestamp": "2025-11-27T20:37:06.240279", "level": "INFO", "logger": "config_manager", "message": "配置文件已備份: /tmp/tmpub_urjls/archived/test_config_backup_20251127_203706.json", "module": "log_manager", "function": "log_structured", "line": 302}
+20:37:06 - INFO - {"timestamp": "2025-11-27T20:37:06.240535", "level": "INFO", "logger": "config_manager", "message": "配置文件已保存: /tmp/tmpub_urjls/active/test_config.json", "module": "log_manager", "function": "log_structured", "line": 302}
+20:37:06 - INFO - {"timestamp": "2025-11-27T20:37:06.240775", "level": "INFO", "logger": "config_manager", "message": "配置文件已恢復: /tmp/tmpub_urjls/active/test_config.json", "module": "log_manager", "function": "log_structured", "line": 302}
+20:37:06 - INFO - {"timestamp": "2025-11-27T20:37:06.241236", "level": "INFO", "logger": "config_manager", "message": "配置文件已保存: /tmp/tmpisklj2gx/active/test_config.json", "module": "log_manager", "function": "log_structured", "line": 302}
+20:37:06 - ERROR - {"timestamp": "2025-11-27T20:37:06.241497", "level": "ERROR", "logger": "config_manager", "message": "備份文件校驗和不匹配，可能已損壞: /tmp/tmpisklj2gx/archived/test_backup.json", "module": "log_manager", "function": "log_structured", "line": 302}
+20:37:06 - ERROR - {"timestamp": "2025-11-27T20:37:06.241574", "level": "ERROR", "logger": "config_manager", "message": "期望校驗和: e8706b0ec95510081aaf2f74c7d3a4e0c8526e9feccffaa48a710af9e673bfb4", "module": "log_manager", "function": "log_structured", "line": 302}
+20:37:06 - ERROR - {"timestamp": "2025-11-27T20:37:06.241626", "level": "ERROR", "logger": "config_manager", "message": "實際校驗和: 0c0ab2e259861d005b5dd9daf9cecbfa97600df756365564f70b09686fdd8075", "module": "log_manager", "function": "log_structured", "line": 302}
+20:37:06 - INFO - {"timestamp": "2025-11-27T20:37:06.242203", "level": "INFO", "logger": "config_manager", "message": "配置文件已保存: /tmp/tmpzfbupvy4/templates/test_template.json", "module": "log_manager", "function": "log_structured", "line": 302}
+20:37:06 - INFO - {"timestamp": "2025-11-27T20:37:06.242634", "level": "INFO", "logger": "config_manager", "message": "配置文件已保存: /tmp/tmpaza9sxrn/active/test_config.json", "module": "log_manager", "function": "log_structured", "line": 302}
+20:37:06 - INFO - {"timestamp": "2025-11-27T20:37:06.242720", "level": "INFO", "logger": "config_manager", "message": "配置文件已刪除: /tmp/tmpaza9sxrn/active/test_config.json", "module": "log_manager", "function": "log_structured", "line": 302}
+20:37:06 - ERROR - {"timestamp": "2025-11-27T20:37:06.243657", "level": "ERROR", "logger": "config_manager", "message": "保存配置文件失敗 /tmp/tmpngepeq9c/readonly/test.json: [Errno 13] Permission denied: '/tmp/tmpngepeq9c/readonly/test.json'", "module": "log_manager", "function": "log_structured", "line": 302}
+20:37:06 - INFO - {"timestamp": "2025-11-27T20:37:06.244018", "level": "INFO", "logger": "config_manager", "message": "配置文件已保存: /tmp/tmp96jt5xy6/active/active_config.json", "module": "log_manager", "function": "log_structured", "line": 302}
+20:37:06 - INFO - {"timestamp": "2025-11-27T20:37:06.244169", "level": "INFO", "logger": "config_manager", "message": "配置文件已保存: /tmp/tmp96jt5xy6/templates/template_config.json", "module": "log_manager", "function": "log_structured", "line": 302}
+20:37:06 - INFO - {"timestamp": "2025-11-27T20:37:06.244298", "level": "INFO", "logger": "config_manager", "message": "配置文件已保存: /tmp/tmp96jt5xy6/archived/archived_config.json", "module": "log_manager", "function": "log_structured", "line": 302}
+20:37:06 - INFO - {"timestamp": "2025-11-27T20:37:06.245023", "level": "INFO", "logger": "config_manager", "message": "配置文件已保存: /tmp/tmpndzvyx2j/active/test_config.json", "module": "log_manager", "function": "log_structured", "line": 302}
+
+錯誤輸出:
+----------------------------------------
+test_backup_and_restore (test_config_manager.TestConfigManager.test_backup_and_restore)
+測試配置備份和恢復 ... ok
+test_backup_integrity_check (test_config_manager.TestConfigManager.test_backup_integrity_check)
+測試備份完整性檢查 ... ok
+test_config_validation (test_config_manager.TestConfigManager.test_config_validation)
+測試配置驗證 ... ok
+test_create_from_template (test_config_manager.TestConfigManager.test_create_from_template)
+測試從模板創建配置 ... ok
+test_delete_config (test_config_manager.TestConfigManager.test_delete_config)
+測試刪除配置 ... ok
+test_directory_creation (test_config_manager.TestConfigManager.test_directory_creation)
+測試目錄創建 ... ok
+test_environment_variable_expansion (test_config_manager.TestConfigManager.test_environment_variable_expansion)
+測試環境變量展開 ... ok
+test_environment_variable_security (test_config_manager.TestConfigManager.test_environment_variable_security)
+測試環境變量安全性 ... ok
+test_error_handling (test_config_manager.TestConfigManager.test_error_handling)
+測試錯誤處理 ... ok
+test_list_configs (test_config_manager.TestConfigManager.test_list_configs)
+測試列出配置 ... ok
+test_save_and_load_config (test_config_manager.TestConfigManager.test_save_and_load_config)
+測試配置保存和加載 ... ok
+test_input_validation (unittest.loader._FailedTest.test_input_validation) ... ERROR
+test_positive_number (test_input_validation_standalone.TestCommonRules.test_positive_number)
+測試正數規則 ... ok
+test_price_range (test_input_validation_standalone.TestCommonRules.test_price_range)
+測試價格範圍規則 ... ok
+test_validate_failure (test_input_validation_standalone.TestInputValidator.test_validate_failure)
+測試失敗驗證 ... ok
+test_validate_success (test_input_validation_standalone.TestInputValidator.test_validate_success)
+測試成功驗證 ... ok
+test_strategy_workflow (test_input_validation_standalone.TestIntegration.test_strategy_workflow)
+測試策略工作流程 ... ok
+test_web_api_workflow (test_input_validation_standalone.TestIntegration.test_web_api_workflow)
+測試 Web API 工作流程 ... ok
+test_extreme_price_change (test_input_validation_standalone.TestStrategyValidator.test_extreme_price_change)
+測試極端價格變化 ... ok
+test_invalid_tick_size_alignment (test_input_validation_standalone.TestStrategyValidator.test_invalid_tick_size_alignment)
+測試無效的 tick size 對齊 ... ok
+test_valid_grid_adjustment (test_input_validation_standalone.TestStrategyValidator.test_valid_grid_adjustment)
+測試有效的網格調整 ... ok
+test_failed_validation (test_input_validation_standalone.TestValidationRule.test_failed_validation)
+測試失敗的驗證 ... ok
+test_successful_validation (test_input_validation_standalone.TestValidationRule.test_successful_validation)
+測試成功的驗證 ... ok
+test_invalid_grid_adjustment (test_input_validation_standalone.TestWebApiValidator.test_invalid_grid_adjustment)
+測試無效的網格調整數據 ... ok
+test_price_range_violation (test_input_validation_standalone.TestWebApiValidator.test_price_range_violation)
+測試價格範圍違規 ... ok
+test_valid_grid_adjustment (test_input_validation_standalone.TestWebApiValidator.test_valid_grid_adjustment)
+測試有效的網格調整數據 ... ok
+
+======================================================================
+ERROR: test_input_validation (unittest.loader._FailedTest.test_input_validation)
+----------------------------------------------------------------------
+ImportError: Failed to import test module: test_input_validation
+Traceback (most recent call last):
+  File "/usr/lib/python3.11/unittest/loader.py", line 407, in _find_test_path
+    module = self._get_module_from_name(name)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/unittest/loader.py", line 350, in _get_module_from_name
+    __import__(name)
+  File "/home/eddy/Backpack-MM-Simple/tests/test_input_validation.py", line 5, in <module>
+    from utils.input_validation import (
+ImportError: cannot import name 'CliValidator' from 'utils.input_validation' (/home/eddy/Backpack-MM-Simple/utils/input_validation.py)
+
+
+----------------------------------------------------------------------
+Ran 26 tests in 0.006s
+
+FAILED (errors=1)
+
+
+測試結果: 失敗

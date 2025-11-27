@@ -1,0 +1,47 @@
+{
+  "metadata": {
+    "name": "Paradex 永續合約網格策略模板",
+    "description": "Paradex 交易所永續合約網格交易策略配置模板",
+    "version": "1.0.0",
+    "exchange": "paradex",
+    "symbol": "${SYMBOL}",
+    "market_type": "perp",
+    "strategy": "grid",
+    "created_at": "${CREATED_AT}",
+    "created_by": "template"
+  },
+  "daemon_config": {
+    "python_path": "python3",
+    "script_path": "run.py",
+    "working_dir": ".",
+    "log_dir": "logs",
+    "max_restart_attempts": 3,
+    "restart_delay": 60,
+    "health_check_interval": 30,
+    "memory_limit_mb": 2048,
+    "cpu_limit_percent": 80,
+    "auto_restart": true,
+    "log_cleanup_interval": 86400,
+    "log_retention_days": 7
+  },
+  "exchange_config": {
+    "private_key": "${PARADEX_PRIVATE_KEY}",
+    "account_address": "${PARADEX_ACCOUNT_ADDRESS}",
+    "base_url": "https://api.prod.paradex.trade/v1"
+  },
+  "strategy_config": {
+    "grid_upper": 0,
+    "grid_lower": 0,
+    "grid_num": 10,
+    "grid_mode": "arithmetic",
+    "grid_type": "neutral",
+    "order_quantity": 0.1,
+    "auto_price_range": true,
+    "price_range_percent": 5.0,
+    "max_position": 1.0,
+    "stop_loss": null,
+    "take_profit": null,
+    "duration": 3600,
+    "interval": 60
+  }
+}

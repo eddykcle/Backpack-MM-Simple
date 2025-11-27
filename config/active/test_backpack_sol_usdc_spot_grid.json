@@ -1,0 +1,59 @@
+{
+  "metadata": {
+    "name": "test_backpack_sol_usdc_spot_grid.json",
+    "description": "Backpack 交易所現貨網格交易策略模板，適合 SOL_USDC 等高波動性交易對",
+    "exchange": "backpack",
+    "symbol": "SOL_USDC",
+    "market_type": "spot",
+    "strategy": "grid",
+    "created_at": "2025-11-27T01:01:28.338880",
+    "updated_at": "2025-11-27T01:01:28.338903",
+    "version": "1.0.0",
+    "author": "Backpack-MM-Simple",
+    "tags": [
+      "backpack",
+      "spot",
+      "grid",
+      "template"
+    ]
+  },
+  "daemon_config": {
+    "python_path": ".venv/bin/python3",
+    "script_path": "run.py",
+    "working_dir": ".",
+    "log_dir": "logs",
+    "max_restart_attempts": 3,
+    "restart_delay": 60,
+    "health_check_interval": 30,
+    "memory_limit_mb": 2048,
+    "cpu_limit_percent": 80,
+    "auto_restart": true,
+    "log_cleanup_interval": 86400,
+    "log_retention_days": 2
+  },
+  "exchange_config": {
+    "api_key": "${BACKPACK_KEY}",
+    "secret_key": "${BACKPACK_SECRET}",
+    "base_url": "${BASE_URL:-https://api.backpack.work}",
+    "api_version": "v1",
+    "default_window": "5000"
+  },
+  "strategy_config": {
+    "grid_upper_price": 160,
+    "grid_lower_price": 140,
+    "grid_num": 20,
+    "grid_mode": "arithmetic",
+    "auto_borrow": true,
+    "auto_borrow_repay": true,
+    "duration": 86400,
+    "interval": 60
+  },
+  "exchange": "backpack",
+  "symbol": "SOL_USDC",
+  "market_type": "spot",
+  "strategy": "grid",
+  "api_key": "test_key",
+  "secret_key": "test_secret",
+  "grid_num": 15,
+  "order_quantity": 0.5
+}

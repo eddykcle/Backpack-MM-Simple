@@ -4,9 +4,9 @@
 ## 計劃 P1
 - [x] correct exit
 - [x] log清理的問題（保存一天前的log）
-- [] 不同交易所不同trading pair的config，要有一個template
-- [] hyperliquid
+- [x] 不同交易所不同trading pair的config，要有一個template
 - [] 幾個bot同時進行（不同api key）
+- [] hyperliquid
 - [] 請問我現在這個repo裡面，有什麼automation testing的功能嗎？
 
 
