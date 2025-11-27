@@ -65,6 +65,9 @@ pip install psutil requests
 # 啟動守護進程（推薦使用虛擬環境中的Python）
 .venv/bin/python3 core/daemon_manager.py start --daemon
 
+# 運行新的config file
+.venv/bin/python3 core/daemon_manager.py start --config config/active/backpack_eth_usdc_perp_grid.json --daemon
+
 # 查看狀態
 .venv/bin/python3 core/daemon_manager.py status
 
@@ -81,7 +84,7 @@ pip install psutil requests
 
 ```bash
 # 運行CLI模式
-python run.py --cli
+.venv/bin/python3 run.py --cli
 
 選擇選單 10
 輸入 Web 控制端地址: http://127.0.0.1:5000

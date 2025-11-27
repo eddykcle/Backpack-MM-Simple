@@ -6281,3 +6281,4 @@ venv/lib/python3.11/site-packages/setuptools-66.1.1.dist-info/WHEEL
 venv/
 logs/bot.pid
 logs/process.pid
+logs/

@@ -29,7 +29,7 @@
   "exchange_config": {
     "api_key": "${BACKPACK_KEY}",
     "secret_key": "${BACKPACK_SECRET}",
-    "base_url": "${BACKPACK_URL:-https://api.backpack.exchange}",
+    "base_url": "${BASE_URL:-https://api.backpack.work}",
     "api_version": "v1",
     "default_window": "5000"
   },

@@ -1597,7 +1597,8 @@ def config_management_command():
         print("2 - 從模板創建新配置")
         print("3 - 驗證配置文件")
         print("4 - 使用配置運行交易機器人")
-        print("5 - 返回主菜單")
+        print("5 - 高級配置管理")
+        print("6 - 返回主菜單")
         
         choice = input("請選擇操作: ").strip()
         
@@ -1610,6 +1611,248 @@ def config_management_command():
         elif choice == '4':
             config_run_command()
         elif choice == '5':
+            config_advanced_command()
+        elif choice == '6':
+            break
+        else:
+            print("無效選擇，請重新輸入")
+
+def config_batch_validate_command():
+    """批量驗證配置文件"""
+    try:
+        from core.config_manager import ConfigManager
+        from core.exceptions import ConfigValidationError
+        config_manager = ConfigManager()
+        
+        print("\n=== 批量驗證配置文件 ===")
+        
+        # 獲取所有配置文件
+        all_configs = config_manager.list_configs()
+        
+        if not all_configs:
+            print("沒有找到任何配置文件")
+            return
+        
+        # 篩選選項
+        print("選擇要驗證的配置類型:")
+        print("1 - 所有配置文件")
+        print("2 - 僅活躍配置")
+        print("3 - 僅模板文件")
+        print("4 - 僅歸檔配置")
+        
+        choice = input("請選擇 (1-4): ").strip()
+        
+        if choice == '1':
+            configs_to_validate = all_configs
+        elif choice == '2':
+            configs_to_validate = [c for c in all_configs if c.is_active]
+        elif choice == '3':
+            configs_to_validate = [c for c in all_configs if c.is_template]
+        elif choice == '4':
+            configs_to_validate = [c for c in all_configs if c.is_archived]
+        else:
+            print("無效選擇")
+            return
+        
+        print(f"\n開始驗證 {len(configs_to_validate)} 個配置文件...")
+        
+        valid_count = 0
+        error_count = 0
+        warning_count = 0
+        
+        for config_info in configs_to_validate:
+            try:
+                validation_result = config_manager.validate_config_file(config_info.path)
+                
+                if validation_result.is_valid:
+                    print(f"✅ {config_info.name} - 驗證通過")
+                    valid_count += 1
+                else:
+                    print(f"❌ {config_info.name} - 驗證失敗")
+                    error_count += 1
+                    for error in validation_result.errors:
+                        print(f"    - {error}")
+                
+                if validation_result.warnings:
+                    warning_count += len(validation_result.warnings)
+                    for warning in validation_result.warnings:
+                        print(f"    ⚠️ {warning}")
+                        
+            except ConfigValidationError as e:
+                print(f"❌ {config_info.name} - 驗證異常: {e}")
+                error_count += 1
+            except Exception as e:
+                print(f"❌ {config_info.name} - 未知錯誤: {e}")
+                error_count += 1
+        
+        print(f"\n=== 驗證結果 ===")
+        print(f"總計: {len(configs_to_validate)} 個配置文件")
+        print(f"✅ 通過: {valid_count} 個")
+        print(f"❌ 失敗: {error_count} 個")
+        print(f"⚠️ 警告: {warning_count} 個")
+        
+        if error_count > 0:
+            print(f"\n建議: 修復失敗的配置文件後重新驗證")
+        
+    except Exception as e:
+        print(f"批量驗證失敗: {str(e)}")
+
+def config_batch_backup_command():
+    """批量備份配置文件"""
+    try:
+        from core.config_manager import ConfigManager
+        from core.exceptions import ConfigBackupError
+        config_manager = ConfigManager()
+        
+        print("\n=== 批量備份配置文件 ===")
+        
+        # 獲取活躍配置
+        active_configs = config_manager.list_active_configs()
+        
+        if not active_configs:
+            print("沒有找到活躍配置文件")
+            return
+        
+        print(f"找到 {len(active_configs)} 個活躍配置文件")
+        
+        confirm = input(f"確定要備份所有活躍配置文件嗎? (y/n): ").strip().lower()
+        if confirm not in ['y', 'yes']:
+            print("操作已取消")
+            return
+        
+        print("\n開始批量備份...")
+        
+        success_count = 0
+        error_count = 0
+        
+        for config_name in active_configs:
+            config_path = config_manager.get_config_path(config_name.replace('.json', ''), 'active')
+            
+            try:
+                backup_path = config_manager.backup_config(config_path)
+                if backup_path:
+                    print(f"✅ {config_name} -> {Path(backup_path).name}")
+                    success_count += 1
+                else:
+                    print(f"❌ {config_name} - 備份失敗")
+                    error_count += 1
+            except ConfigBackupError as e:
+                print(f"❌ {config_name} - 備份異常: {e}")
+                error_count += 1
+            except Exception as e:
+                print(f"❌ {config_name} - 未知錯誤: {e}")
+                error_count += 1
+        
+        print(f"\n=== 備份結果 ===")
+        print(f"總計: {len(active_configs)} 個配置文件")
+        print(f"✅ 成功: {success_count} 個")
+        print(f"❌ 失敗: {error_count} 個")
+        
+        if error_count == 0:
+            print("\n🎉 所有配置文件備份成功!")
+        else:
+            print(f"\n⚠️ 有 {error_count} 個配置文件備份失敗，請檢查日誌")
+        
+    except Exception as e:
+        print(f"批量備份失敗: {str(e)}")
+
+def config_batch_cleanup_command():
+    """批量清理舊備份文件"""
+    try:
+        from core.config_manager import ConfigManager
+        config_manager = ConfigManager()
+        
+        print("\n=== 批量清理舊備份文件 ===")
+        
+        # 獲取歸檔配置
+        archived_configs = config_manager.list_archived_configs()
+        
+        if not archived_configs:
+            print("沒有找到歸檔配置文件")
+            return
+        
+        # 篩選備份文件
+        backup_files = [f for f in archived_configs if '_backup_' in f]
+        
+        if not backup_files:
+            print("沒有找到備份文件")
+            return
+        
+        print(f"找到 {len(backup_files)} 個備份文件:")
+        for backup_file in backup_files[:10]:  # 只顯示前10個
+            print(f"  - {backup_file}")
+        
+        if len(backup_files) > 10:
+            print(f"  ... 還有 {len(backup_files) - 10} 個文件")
+        
+        # 詢問保留天數
+        days_input = input("請輸入要保留的天數 (默認 7 天): ").strip()
+        try:
+            keep_days = int(days_input) if days_input else 7
+        except ValueError:
+            print("無效的天數，使用默認值 7 天")
+            keep_days = 7
+        
+        # 計算截止日期
+        from datetime import datetime, timedelta
+        cutoff_date = datetime.now() - timedelta(days=keep_days)
+        
+        print(f"\n將刪除 {keep_days} 天前的備份文件 (早於 {cutoff_date.strftime('%Y-%m-%d %H:%M:%S')})")
+        
+        confirm = input("確定要繼續嗎? (y/n): ").strip().lower()
+        if confirm not in ['y', 'yes']:
+            print("操作已取消")
+            return
+        
+        print("\n開始清理...")
+        
+        deleted_count = 0
+        error_count = 0
+        
+        for backup_file in backup_files:
+            backup_path = config_manager.get_config_path(backup_file.replace('.json', ''), 'archived')
+            
+            try:
+                # 獲取文件修改時間
+                file_mtime = datetime.fromtimestamp(backup_path.stat().st_mtime)
+                
+                if file_mtime < cutoff_date:
+                    backup_path.unlink()
+                    print(f"🗑️ 已刪除: {backup_file}")
+                    deleted_count += 1
+                    
+            except Exception as e:
+                print(f"❌ 刪除失敗 {backup_file}: {e}")
+                error_count += 1
+        
+        print(f"\n=== 清理結果 ===")
+        print(f"🗑️ 已刪除: {deleted_count} 個文件")
+        print(f"❌ 刪除失敗: {error_count} 個文件")
+        
+        if deleted_count > 0:
+            print(f"\n✨ 清理完成，釋放了磁盤空間")
+        
+    except Exception as e:
+        print(f"批量清理失敗: {str(e)}")
+
+def config_advanced_command():
+    """高級配置管理命令"""
+    while True:
+        print("\n=== 高級配置管理 ===")
+        print("1 - 批量驗證配置文件")
+        print("2 - 批量備份配置文件")
+        print("3 - 批量清理舊備份")
+        print("4 - 返回配置管理主菜單")
+        
+        choice = input("請選擇操作: ").strip()
+        
+        if choice == '1':
+            config_batch_validate_command()
+        elif choice == '2':
+            config_batch_backup_command()
+        elif choice == '3':
+            config_batch_cleanup_command()
+        elif choice == '4':
             break
         else:
             print("無效選擇，請重新輸入")

@@ -13,6 +13,11 @@ from dataclasses import dataclass
 import glob
 
 from core.logger import setup_logger
+from core.exceptions import (
+    ConfigError, ConfigValidationError, ConfigLoadError,
+    ConfigSaveError, ConfigBackupError, ConfigRestoreError,
+    EnvironmentVariableError
+)
 
 logger = setup_logger("config_manager")
 
@@ -125,6 +130,9 @@ class ConfigManager:
             
         Returns:
             展開環境變量後的文本或字典
+            
+        Raises:
+            ValueError: 當必需的敏感環境變量未設置時
         """
         if isinstance(text, dict):
             return {k: self.expand_env_vars(v) for k, v in text.items()}
@@ -141,6 +149,16 @@ class ConfigManager:
                     var_name, default_value = var_expr.split(':-', 1)
                 else:
                     var_name, default_value = var_expr, match.group(0)
+                
+                # 檢查敏感環境變量
+                sensitive_vars = ['API_KEY', 'SECRET_KEY', 'PRIVATE_KEY', 'PASSWORD', 'TOKEN']
+                if any(sensitive in var_name.upper() for sensitive in sensitive_vars):
+                    env_value = os.getenv(var_name)
+                    if env_value is None:
+                        if default_value == match.group(0):  # 沒有默認值
+                            raise EnvironmentVariableError(f"必需的敏感環境變量 {var_name} 未設置", var_name=var_name)
+                        else:
+                            logger.warning(f"敏感環境變量 {var_name} 未設置，使用默認值")
                 
                 return os.getenv(var_name, default_value)
             
@@ -257,7 +275,7 @@ class ConfigManager:
         config_path = Path(config_path)
         
         if not config_path.exists():
-            raise FileNotFoundError(f"配置文件不存在: {config_path}")
+            raise ConfigLoadError(f"配置文件不存在: {config_path}", config_path=str(config_path))
         
         try:
             with open(config_path, 'r', encoding='utf-8') as f:
@@ -269,7 +287,11 @@ class ConfigManager:
             return config_data
             
         except json.JSONDecodeError as e:
-            raise json.JSONDecodeError(f"配置文件格式錯誤: {e}")
+            raise ConfigLoadError(f"配置文件格式錯誤: {e}", config_path=str(config_path))
+        except EnvironmentVariableError:
+            raise  # 重新拋出環境變量錯誤
+        except Exception as e:
+            raise ConfigLoadError(f"加載配置文件失敗: {e}", config_path=str(config_path))
     
     def save_config(self, config_path: Union[str, Path], config_data: Dict) -> bool:
         """保存配置文件
@@ -300,7 +322,7 @@ class ConfigManager:
             
         except Exception as e:
             logger.error(f"保存配置文件失敗 {config_path}: {e}")
-            return False
+            raise ConfigSaveError(f"保存配置文件失敗: {e}", config_path=str(config_path))
     
     def create_from_template(self, template_name: str, target_name: str, 
                           params: Optional[Dict[str, Any]] = None) -> Dict:
@@ -323,10 +345,13 @@ class ConfigManager:
             # 如果直接傳入的文件名不存在，嘗試添加 .json 後綴
             template_path = self.templates_dir / f"{template_name}.json"
             if not template_path.exists():
-                raise FileNotFoundError(f"模板文件不存在: {template_name}")
+                raise ConfigLoadError(f"模板文件不存在: {template_name}", config_path=str(template_path))
         
-        # 加載模板
-        config_data = self.load_config(template_path, expand_vars=False)
+        try:
+            # 加載模板
+            config_data = self.load_config(template_path, expand_vars=False)
+        except ConfigLoadError as e:
+            raise ConfigLoadError(f"加載模板失敗: {e}", config_path=str(template_path))
         
         # 應用參數
         if params:
@@ -348,6 +373,14 @@ class ConfigManager:
         # 支持點號分隔的路徑，如 "strategy_config.grid_num"
         for key, value in params.items():
             self._set_nested_value(result, key, value)
+        
+        # 特殊處理：直接替換 metadata 中的字段
+        # 這是因為有些參數需要同時更新多個位置
+        for key, value in params.items():
+            if key == 'symbol' and 'metadata' in result:
+                result['metadata']['symbol'] = value
+            elif key == 'grid_num' and 'strategy_config' in result:
+                result['strategy_config']['grid_num'] = value
         
         return result
     
@@ -559,7 +592,7 @@ class ConfigManager:
             
         except Exception as e:
             logger.error(f"刪除配置文件失敗 {config_path}: {e}")
-            return False
+            raise ConfigError(f"刪除配置文件失敗: {e}", config_path=str(config_path))
     
     def backup_config(self, config_path: Union[str, Path]) -> Optional[str]:
         """備份配置文件
@@ -581,14 +614,23 @@ class ConfigManager:
             backup_filename = f"{config_path.stem}_backup_{timestamp}.json"
             backup_path = self.archived_dir / backup_filename
             
+            # 複製文件
             shutil.copy2(config_path, backup_path)
+            
+            # 計算並保存校驗和
+            checksum = self._calculate_checksum(config_path)
+            checksum_path = backup_path.with_suffix('.json.checksum')
+            with open(checksum_path, 'w') as f:
+                f.write(checksum)
+            
             logger.info(f"配置文件已備份: {backup_path}")
+            logger.debug(f"備份文件校驗和: {checksum}")
             
             return str(backup_path)
             
         except Exception as e:
             logger.error(f"備份配置文件失敗 {config_path}: {e}")
-            return None
+            raise ConfigBackupError(f"備份配置文件失敗: {e}", config_path=str(config_path))
     
     def restore_config(self, backup_path: Union[str, Path], target_path: Optional[Union[str, Path]] = None) -> bool:
         """恢復配置文件
@@ -603,8 +645,7 @@ class ConfigManager:
         backup_path = Path(backup_path)
         
         if not backup_path.exists():
-            logger.error(f"備份文件不存在: {backup_path}")
-            return False
+            raise ConfigRestoreError(f"備份文件不存在: {backup_path}")
         
         if target_path is None:
             # 從備份文件名推斷原路徑
@@ -614,6 +655,24 @@ class ConfigManager:
         target_path = Path(target_path)
         
         try:
+            # 驗證備份文件完整性
+            checksum_path = backup_path.with_suffix('.json.checksum')
+            if checksum_path.exists():
+                with open(checksum_path, 'r') as f:
+                    expected_checksum = f.read().strip()
+                
+                actual_checksum = self._calculate_checksum(backup_path)
+                if expected_checksum != actual_checksum:
+                    logger.error(f"備份文件校驗和不匹配，可能已損壞: {backup_path}")
+                    logger.error(f"期望校驗和: {expected_checksum}")
+                    logger.error(f"實際校驗和: {actual_checksum}")
+                    raise ConfigRestoreError(f"備份文件校驗和不匹配", config_path=str(backup_path),
+                                          expected=expected_checksum, actual=actual_checksum)
+                else:
+                    logger.debug(f"備份文件校驗和驗證通過: {actual_checksum}")
+            else:
+                logger.warning(f"備份文件缺少校驗和文件，跳過完整性檢查: {backup_path}")
+            
             # 確保目標目錄存在
             target_path.parent.mkdir(parents=True, exist_ok=True)
             
@@ -622,9 +681,10 @@ class ConfigManager:
             
             return True
             
+        except ConfigRestoreError:
+            raise  # 重新拋出配置恢復錯誤
         except Exception as e:
-            logger.error(f"恢復配置文件失敗: {e}")
-            return False
+            raise ConfigRestoreError(f"恢復配置文件失敗: {e}", config_path=str(backup_path))
     
     def get_config_path(self, config_name: str, config_type: str = "active") -> Path:
         """獲取配置文件路徑
@@ -723,3 +783,20 @@ class ConfigManager:
         """
         config_data = self.load_config(config_path, expand_vars=False)
         return self.validate_config(config_data)
+    
+    def _calculate_checksum(self, file_path: Path) -> str:
+        """計算文件的校驗和
+        
+        Args:
+            file_path: 文件路徑
+            
+        Returns:
+            文件的 SHA256 校驗和
+        """
+        import hashlib
+        
+        hash_sha256 = hashlib.sha256()
+        with open(file_path, "rb") as f:
+            for chunk in iter(lambda: f.read(4096), b""):
+                hash_sha256.update(chunk)
+        return hash_sha256.hexdigest()

@@ -109,8 +109,8 @@ class TradingBotDaemon:
             from core.config_manager import ConfigManager
             config_manager = ConfigManager()
             
-            # 加載配置文件
-            config_data = config_manager.load_config(self.config_file, expand_vars=True)
+            # 加載配置文件（不展開環境變量，先驗證）
+            config_data = config_manager.load_config(self.config_file, expand_vars=False)
             
             # 驗證配置
             validation_result = config_manager.validate_config(config_data)
@@ -125,10 +125,13 @@ class TradingBotDaemon:
                 for warning in validation_result.warnings:
                     self.logger.warning(f"  - {warning}")
             
+            # 驗證通過後，再展開環境變量
+            config_data_expanded = config_manager.expand_env_vars(config_data)
+            
             # 提取守護進程配置
-            daemon_config = config_data.get("daemon_config", {})
-            exchange_config = config_data.get("exchange_config", {})
-            strategy_config = config_data.get("strategy_config", {})
+            daemon_config = config_data_expanded.get("daemon_config", {})
+            exchange_config = config_data_expanded.get("exchange_config", {})
+            strategy_config = config_data.get("strategy_config", {})  # 使用未展開的策略配置
             metadata = config_data.get("metadata", {})
             
             # 構建 bot_args
