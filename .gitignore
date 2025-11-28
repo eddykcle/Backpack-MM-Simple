@@ -1,6 +1,7 @@
 # Logs
 *.log
 *.gz
+*.pid
 
 # Byte-code files
 __pycache__/
