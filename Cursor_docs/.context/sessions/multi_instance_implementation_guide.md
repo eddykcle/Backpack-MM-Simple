@@ -1,562 +1,1038 @@
-# 多實例交易機器人實施指南
+# 多實例交易機器人系統：綜合實施指南（修訂版）
 
-## 概述
+## 📋 文檔信息
 
-本文檔詳細記錄了如何將現有的單實例交易機器人系統改造為支持多實例並發運行的完整方案。
+- **日期**：2025-11-28
+- **版本**：2.0（Claude Code 審閱修訂版）
+- **目標**：實現多個 Perp Grid Bot 實例並發運行，每個實例擁有獨立的策略、配置、API 密鑰和資源隔離
 
-## 系統架構分析
+---
 
-### 當前系統組件
+## 1. 現狀分析與架構評估
 
-1. **守護進程管理器** (`core/daemon_manager.py`) - 負責啟動、監控和重啟交易機器人
-2. **統一配置系統** (`config.py`) - 集中管理API密鑰和交易所配置
-3. **多交易所支持** - 支持Backpack、Aster、Paradex和Lighter
-4. **Web控制界面** (`web/server.py`) - 提供Web UI和API
-5. **多策略支持** - 包括標準做市、網格、對沖等策略
+### 1.1 已完成的基礎設施 ✅
 
-### 多實例運行的挑戰和限制
+經過代碼審查，以下功能已經完善：
 
-#### 1. 配置管理問題
-- **單一配置文件**：當前系統使用單一的 `daemon_config.json` 和環境變量
-- **API密鑰衝突**：所有實例共享相同的環境變量，無法區分不同帳戶
-- **全局狀態衝突**：Web服務器使用全局變量存儲策略實例和狀態
+1. **多配置管理系統**：
+   - `ConfigManager` (core/config_manager.py) 已實現完整的配置管理功能
+   - 支持 `config/templates/`、`config/active/`、`config/archived/` 目錄結構
+   - 環境變量展開與驗證機制完善
 
-#### 2. 進程管理限制
-- **單一守護進程**：當前設計只管理一個交易機器人進程
-- **PID文件衝突**：多個實例會使用相同的PID文件路徑
-- **日誌文件衝突**：所有實例寫入相同的日誌目錄和文件
+2. **守護進程基礎**：
+   - `TradingBotDaemon` (core/daemon_manager.py) 已實現進程監控、自動重啟、健康檢查
+   - 支持新舊兩種配置格式（傳統單文件和多配置格式）
 
-#### 3. 網絡端口衝突
-- **Web服務端口**：默認使用5000端口，多個實例會衝突
-- **健康檢查端點**：無法區分不同實例的健康狀態
+3. **日誌管理系統**：
+   - 結構化日誌系統 (core/log_manager.py)
+   - 自動日誌輪轉和清理
 
-#### 4. 資源隔離問題
-- **數據庫共享**：所有實例共享同一個數據庫，無法區分交易記錄
-- **WebSocket連接**：可能會有連接數限制或認證衝突
+### 1.2 多實例運行的關鍵瓶頸 ⚠️
 
-## 多實例解決方案設計
+經過深入分析，發現以下**必須解決**的問題：
 
-### 方案1：實例ID隔離（推薦）
+#### 🔴 Critical Issues（必須解決）
 
-這是最輕量級且兼容的解決方案，通過為每個實例分配唯一ID來實現隔離：
+1. **PID 文件衝突**
+   - 現狀：所有實例共用 `logs/daemon.pid` 和 `logs/bot.pid`
+   - 影響：第二個實例會覆蓋第一個實例的 PID，導致狀態混亂
+   - 位置：`daemon_manager.py` line 51, 273
 
-#### 1.1 配置文件結構調整
+2. **Web 服務器端口衝突**
+   - 現狀：所有實例默認使用 port 5000
+   - 影響：第二個實例無法啟動 Web 界面
+   - 位置：`web/server.py` line 1051-1077, `run.py` line 263
+
+3. **日誌目錄共享**
+   - 現狀：所有實例寫入相同的日誌目錄 `logs/YYYY-MM-DD/`
+   - 影響：日誌交錯，難以排查問題，可能有文件鎖衝突
+   - 位置：`daemon_manager.py` line 592-597
+
+4. **數據庫文件衝突**
+   - 現狀：所有實例共用同一個 SQLite 數據庫 `trade.db`
+   - 影響：數據交錯、鎖衝突、數據不一致
+   - 需要檢查：`database/db.py`
+
+5. **Web 服務器全局狀態**
+   - 現狀：Web 服務器使用全局變量存儲策略實例 (`current_strategy`)
+   - 影響：多實例情況下只能控制一個實例
+   - 位置：`web/server.py` line 43-68, 391-403
+
+#### 🟡 Important Issues（建議解決）
+
+6. **缺少實例註冊機制**
+   - 無法列出當前運行的所有實例
+   - 無法通過統一接口管理實例
+
+7. **實例 ID 衝突防護**
+   - 沒有檢查同一 instance_id 是否已經在運行
+
+8. **命令行工具不支持實例管理**
+   - 現有 `daemon_manager.py` 的 CLI 不支持 `--instance-id` 參數
+   - 沒有 `list-instances` 命令
+
+---
+
+## 2. 技術方案設計
+
+### 2.1 方案選擇：輕量級獨立實例方案
+
+**選擇理由**：
+- ✅ 實施簡單，風險低
+- ✅ 實例完全隔離，一個崩潰不影響其他
+- ✅ 利用現有架構，改動最小
+- ✅ 符合原始文檔的設計思路
+
+**架構概述**：
 ```
-config/
-├── daemon_config.json              # 默認配置
-├── instances/
-│   ├── instance_1_config.json     # 實例1配置
-│   ├── instance_2_config.json     # 實例2配置
-│   └── instance_3_config.json     # 實例3配置
-└── profiles/
-    ├── backpack_prod.json         # Backpack生產環境配置
-    ├── aster_test.json            # Aster測試環境配置
-    └── paradex_hedge.json         # Paradex對沖策略配置
+每個實例 = 獨立的守護進程 + 獨立的 run.py 子進程 + 獨立的 Web 服務器
+
+實例 A (bp_sol_01)                     實例 B (bp_eth_02)
+├─ daemon_manager.py (PID: 1001)      ├─ daemon_manager.py (PID: 2001)
+│  ├─ logs/bp_sol_01/daemon.pid       │  ├─ logs/bp_eth_02/daemon.pid
+│  └─ 監控 run.py (PID: 1002)         │  └─ 監控 run.py (PID: 2002)
+├─ run.py --symbol SOL_USDC...        ├─ run.py --symbol ETH_USDC...
+│  ├─ logs/bp_sol_01/bot.pid          │  ├─ logs/bp_eth_02/bot.pid
+│  └─ database/bp_sol_01.db           │  └─ database/bp_eth_02.db
+└─ Web UI (port 5001)                 └─ Web UI (port 5002)
 ```
 
-#### 1.2 實例配置文件格式
+### 2.2 實例 ID 規則
+
+**優先級順序**：
+1. 命令行參數：`--instance-id <id>`（最高優先級）
+2. 配置文件：`metadata.instance_id`
+3. 配置文件名：去掉 `.json` 後綴（例如 `bp_sol_01.json` → `bp_sol_01`）
+
+**命名規範建議**：
+```
+<exchange>_<symbol>_<number>
+例如：
+- bp_sol_01  (Backpack SOL 實例 1)
+- bp_eth_02  (Backpack ETH 實例 2)
+- aster_btc_01 (Aster BTC 實例 1)
+```
+
+### 2.3 資源隔離方案
+
+| 資源類型 | 隔離路徑 | 配置方式 |
+|---------|---------|---------|
+| 守護進程 PID | `logs/{instance_id}/daemon.pid` | 自動生成 |
+| Bot 進程 PID | `logs/{instance_id}/bot.pid` | 自動生成 |
+| 日誌目錄 | `logs/{instance_id}/YYYY-MM-DD/` | daemon_config.log_dir |
+| 數據庫文件 | `database/{instance_id}.db` | daemon_config.db_path |
+| Web 端口 | 5001, 5002, 5003... | daemon_config.web_port |
+
+---
+
+## 3. 詳細實施步驟
+
+### Phase 1：配置結構擴展（0.5 天）
+
+#### 1.1 更新配置文件模板
+
+在 `config/templates/` 和 `config/active/` 中的配置文件添加以下字段：
+
 ```json
 {
-  "instance_id": "instance_1",
-  "instance_name": "Backpack SOL 做市",
-  "api_key_env": "BACKPACK_KEY_1",
-  "secret_key_env": "BACKPACK_SECRET_1",
-  "web_port": 5001,
-  "log_dir": "logs/instance_1",
-  "pid_file": "logs/instance_1/daemon.pid",
-  "db_path": "database/instance_1.db",
-  "bot_args": [
-    "--exchange", "backpack",
-    "--symbol", "SOL_USDC",
-    "--spread", "0.3",
-    "--strategy", "standard"
-  ]
+  "metadata": {
+    "name": "Backpack SOL Grid",
+    "instance_id": "bp_sol_01",  // [新增] 實例唯一標識
+    "exchange": "backpack",
+    "symbol": "SOL_USDC_PERP",
+    "market_type": "perp",
+    "strategy": "perp_grid",
+    "version": "1.0.0"
+  },
+  "daemon_config": {
+    "python_path": ".venv/bin/python3",
+    "script_path": "run.py",
+    "working_dir": ".",
+    "log_dir": "logs/bp_sol_01",           // [新增] 實例專用日誌目錄
+    "db_path": "database/bp_sol_01.db",    // [新增] 實例專用數據庫
+    "web_port": 5001,                       // [新增] Web 服務器端口
+    "max_restart_attempts": 3,
+    "restart_delay": 60,
+    "health_check_interval": 30,
+    "memory_limit_mb": 2048,
+    "cpu_limit_percent": 80,
+    "auto_restart": true,
+    "log_cleanup_interval": 86400,
+    "log_retention_days": 2,
+    "bot_args": [...]
+  },
+  "exchange_config": {...},
+  "strategy_config": {...}
 }
 ```
 
-#### 1.3 環境變量命名規範
-```bash
-# 實例1
-BACKPACK_KEY_1=your_api_key_1
-BACKPACK_SECRET_1=your_secret_1
+**自動回退機制**：
+- 如果配置中未指定 `log_dir`，自動設為 `logs/{instance_id}`
+- 如果未指定 `db_path`，自動設為 `database/{instance_id}.db`
+- 如果未指定 `web_port`，自動從 5001 開始搜索可用端口
 
-# 實例2  
-BACKPACK_KEY_2=your_api_key_2
-BACKPACK_SECRET_2=your_secret_2
+#### 1.2 創建示例配置
 
-# 實例3
-BACKPACK_KEY_3=your_api_key_3
-BACKPACK_SECRET_3=your_secret_3
-```
+創建 `config/active/example_multi_instance.json` 作為參考。
 
-### 方案2：容器化部署
+---
 
-使用Docker容器實現完全隔離，適合大規模部署：
+### Phase 2：守護進程管理器改造（1 天）
 
-#### 2.1 Docker Compose結構
-```yaml
-version: '3.8'
-services:
-  bot1:
-    build: .
-    environment:
-      - INSTANCE_ID=bot1
-      - BACKPACK_KEY=${BACKPACK_KEY_1}
-      - BACKPACK_SECRET=${BACKPACK_SECRET_1}
-    ports:
-      - "5001:5000"
-    volumes:
-      - ./logs/bot1:/app/logs
-      - ./data/bot1:/app/database
+#### 2.1 修改 `core/daemon_manager.py`
 
-  bot2:
-    build: .
-    environment:
-      - INSTANCE_ID=bot2
-      - BACKPACK_KEY=${BACKPACK_KEY_2}
-      - BACKPACK_SECRET=${BACKPACK_SECRET_2}
-    ports:
-      - "5002:5000"
-    volumes:
-      - ./logs/bot2:/app/logs
-      - ./data/bot2:/app/database
-```
+**變更清單**：
 
-### 方案3：微服務架構
+1. **`__init__` 方法**（line 30-54）：
+   ```python
+   def __init__(self, config_file: str = "config/daemon_config.json", instance_id: str = None):
+       self.config_file = Path(config_file)
+       self.is_multi_config = self._is_multi_config_format(config_file)
 
-將系統重構為多服務架構，適合企業級部署：
+       # 確定實例 ID（優先級：參數 > 配置 > 文件名）
+       if instance_id:
+           self.instance_id = instance_id
+       elif self.is_multi_config:
+           # 從配置文件讀取
+           config_data = self._load_config_for_instance_id()
+           self.instance_id = config_data.get('metadata', {}).get('instance_id') or self.config_file.stem
+       else:
+           self.instance_id = self.config_file.stem
 
-#### 3.1 服務拆分
-- **配置服務**：統一管理所有實例配置
-- **調度服務**：負責實例的生命週期管理
-- **監控服務**：收集所有實例的監控數據
-- **交易服務**：每個實例獨立的交易服務
+       # 實例專用日誌目錄
+       self.log_dir = Path(f"logs/{self.instance_id}")
+       self.log_dir.mkdir(parents=True, exist_ok=True)
 
-## 實施難度和工作量評估
+       # 初始化日誌系統
+       self.logger = get_logger("trading_bot_daemon", log_dir=str(self.log_dir))
+       self.process_manager = ProcessManager(str(self.log_dir))
 
-### 方案1：實例ID隔離（推薦）
+       # 加載配置
+       self.config = self.load_config()
 
-#### 🟢 **難度等級：中等**
-- **總工作量估算：2-3天**
-- **風險等級：低**（對現有代碼影響最小）
+       # 信號處理
+       self.running = True
+       signal.signal(signal.SIGTERM, self._signal_handler)
+       signal.signal(signal.SIGINT, self._signal_handler)
 
-#### 具體工作分解：
+       # 子進程管理
+       self._bot_process: Optional[subprocess.Popen] = None
+       self._bot_pid_file = self.log_dir / "bot.pid"  # 實例專用
 
-**1. 配置管理改造（1天）**
-- 修改 `config.py` 支持實例特定配置
-- 創建實例配置模板和加載邏輯
-- 更新環境變量讀取機制
+       # 註冊退出清理
+       atexit.register(self._cleanup_bot_process)
 
-**2. 守護進程改造（0.5天）**
-- 修改 `core/daemon_manager.py` 支持實例ID參數
-- 實現實例隔離的PID和日誌管理
-- 添加實例狀態獨立追蹤
+       # 註冊實例
+       self._register_instance()
+   ```
 
-**3. Web服務改造（0.5天）**
-- 修改 `web/server.py` 支持動態端口
-- 實現多實例狀態監控界面
-- 添加實例管理API端點
+2. **新增實例註冊方法**：
+   ```python
+   def _register_instance(self):
+       """註冊實例到全局註冊表"""
+       registry_file = Path("logs/instances.json")
+       registry = {}
 
-**4. 數據庫隔離（0.5天）**
-- 修改數據庫連接邏輯支持實例特定路徑
-- 更新數據庫初始化腳本
-- 遷移現有數據（如需要）
+       if registry_file.exists():
+           with open(registry_file, 'r') as f:
+               registry = json.load(f)
 
-**5. 啟動腳本和文檔（0.5天）**
-- 創建多實例啟動腳本
-- 編寫配置和部署文檔
-- 創建實例管理工具
+       registry[self.instance_id] = {
+           "config_file": str(self.config_file),
+           "pid": os.getpid(),
+           "log_dir": str(self.log_dir),
+           "web_port": self.config.get("web_port"),
+           "started_at": datetime.now().isoformat(),
+           "status": "starting"
+       }
 
-#### 技術挑戰：
-1. **配置向後兼容性** - 確保現有單實例用戶不受影響
-2. **進程命名衝突** - 需要謹慎處理進程識別
-3. **日誌輪轉隔離** - 確保各實例日誌獨立管理
+       registry_file.parent.mkdir(exist_ok=True)
+       with open(registry_file, 'w') as f:
+           json.dump(registry, f, indent=2)
 
-### 方案2：容器化部署
+   def _unregister_instance(self):
+       """從全局註冊表移除實例"""
+       registry_file = Path("logs/instances.json")
+       if not registry_file.exists():
+           return
 
-#### 🟡 **難度等級：中高**
-- **總工作量估算：3-5天**
-- **風險等級：中**（需要Docker知識）
+       with open(registry_file, 'r') as f:
+           registry = json.load(f)
 
-#### 額外工作：
-- Dockerfile編寫和優化
-- Docker Compose配置
-- 容器監控和日誌收集
-- 數據持久化方案
+       if self.instance_id in registry:
+           del registry[self.instance_id]
 
-### 方案3：微服務架構
+       with open(registry_file, 'w') as f:
+           json.dump(registry, f, indent=2)
+   ```
 
-#### 🔴 **難度等級：高**
-- **總工作量估算：2-3週**
-- **風險等級：高**（架構重大變更）
+3. **修改日誌輸出路徑**（line 592-597）：
+   ```python
+   # 使用實例專用日誌目錄
+   current_date = datetime.now().strftime('%Y-%m-%d')
+   date_dir = self.log_dir / current_date  # 已經是實例專用的
+   date_dir.mkdir(parents=True, exist_ok=True)
 
-#### 額外工作：
-- 服務間通信機制設計
-- 服務發現和註冊
-- 統一配置中心
-- 分布式監控和日誌
+   stdout_log = date_dir / "bot_stdout.log"
+   stderr_log = date_dir / "bot_stderr.log"
+   ```
 
-## 具體實施建議
+4. **修改 `stop()` 方法**（line 286-321）：
+   ```python
+   def stop(self) -> bool:
+       """停止守護進程"""
+       try:
+           # 先清理子進程
+           self._cleanup_bot_process()
 
-### 🎯 **推薦方案：實例ID隔離**
+           # 停止所有由守護進程啟動的 run.py 子進程
+           self._stop_old_bot_processes()
 
-基於你的需求和現有系統架構，我強烈推薦採用**實例ID隔離方案**，原因如下：
+           # 檢查守護進程是否在運行
+           if not self.process_manager.is_running():
+               self.logger.warning("守護進程未在運行")
+               # 清理註冊
+               self._unregister_instance()
+               return False
 
-1. **最小侵入性** - 對現有代碼改動最小
-2. **快速實施** - 2-3天即可完成
-3. **向後兼容** - 不影響現有單實例用戶
-4. **易於維護** - 結構簡單，故障排查容易
+           pid = self.process_manager.get_pid()
+           self.logger.info("正在停止守護進程", pid=pid)
 
-### 📋 **實施步驟詳解**
+           # 停止守護進程
+           success = self.process_manager.stop_process()
 
-#### **第一步：配置系統改造**
+           if success:
+               self.logger.info("守護進程已停止")
+               # 清理註冊
+               self._unregister_instance()
+
+           return success
+       except Exception as e:
+           self.logger.error("停止守護進程失敗", error=str(e), exc_info=True)
+           return False
+   ```
+
+5. **修改 `main()` 函數**（line 756-790）：
+   ```python
+   def main():
+       """主函數"""
+       parser = argparse.ArgumentParser(description='交易機器人守護進程管理器')
+       parser.add_argument('action', choices=['start', 'stop', 'restart', 'status', 'list'],
+                          help='操作: start, stop, restart, status, list')
+       parser.add_argument('--daemon', '-d', action='store_true', help='以守護進程方式運行')
+       parser.add_argument('--config', '-c', default='config/daemon_config.json',
+                          help='配置文件路徑')
+       parser.add_argument('--instance-id', help='實例 ID（可選，默認從配置文件讀取）')
+
+       args = parser.parse_args()
+
+       if args.action == 'list':
+           list_instances()
+           sys.exit(0)
+
+       # 創建守護進程管理器
+       daemon = TradingBotDaemon(args.config, instance_id=args.instance_id)
+
+       # ... 其餘代碼保持不變
+
+   def list_instances():
+       """列出所有運行中的實例"""
+       registry_file = Path("logs/instances.json")
+       if not registry_file.exists():
+           print("沒有運行中的實例")
+           return
+
+       with open(registry_file, 'r') as f:
+           registry = json.load(f)
+
+       if not registry:
+           print("沒有運行中的實例")
+           return
+
+       print(f"{'實例ID':<20} {'PID':<10} {'Web端口':<10} {'配置文件':<40} {'啟動時間':<25}")
+       print("-" * 105)
+       for instance_id, info in registry.items():
+           print(f"{instance_id:<20} {info['pid']:<10} {info.get('web_port', 'N/A'):<10} "
+                 f"{info['config_file']:<40} {info['started_at']:<25}")
+   ```
+
+#### 2.2 修改 `core/log_manager.py`
+
+確保日誌系統支持實例級別的目錄隔離（檢查現有實現是否已支持）。
+
+---
+
+### Phase 3：數據庫隔離（0.5 天）
+
+#### 3.1 檢查並修改 `database/db.py`
+
+確保 `Database` 類的 `__init__` 方法接受 `db_path` 參數：
 
 ```python
-# config.py 新增方法
-def load_instance_config(instance_id: str = None):
-    """加載實例特定配置"""
-    if instance_id:
-        config_file = f"config/instances/{instance_id}_config.json"
-    else:
-        config_file = "config/daemon_config.json"
-    
-    # 加載邏輯...
-    return config
-
-def get_env_key(base_key: str, instance_id: str = None):
-    """獲取實例特定的環境變量名"""
-    if instance_id:
-        return f"{base_key}_{instance_id.upper()}"
-    return base_key
+class Database:
+    def __init__(self, db_path: str = "database/trade.db"):
+        self.db_path = db_path
+        self.conn = None
+        self.init_database()
 ```
 
-#### **第二步：守護進程改造**
+#### 3.2 確保策略初始化時傳遞正確的數據庫路徑
+
+在 `run.py` 中，策略實例化時需要從配置中讀取 `db_path`。
+
+---
+
+### Phase 4：Web 服務器改造（1 天）
+
+#### 4.1 修改 `web/server.py`
+
+**方案選擇**：保持每個實例有獨立的 Web UI（簡單方案）
+
+1. **動態端口支持**（line 1051-1077）：
+   ```python
+   def run_server(host='0.0.0.0', port=5000, debug=False):
+       """運行Web服務器"""
+       # 優先從環境變量讀取
+       web_host = os.getenv('WEB_HOST', host)
+       web_port = int(os.getenv('WEB_PORT', port))
+       web_debug = os.getenv('WEB_DEBUG', 'false').lower() in ('true', '1', 'yes')
+
+       host = web_host
+       port = web_port
+       debug = web_debug
+
+       # 檢查端口是否可用（現有邏輯保持）
+       if not is_port_available(host, port):
+           logger.warning(f"端口 {port} 已被佔用，正在尋找可用端口...")
+           new_port = find_available_port(host, port + 1, 6000)
+           if new_port:
+               logger.info(f"找到可用端口: {new_port}")
+               port = new_port
+           else:
+               logger.error("無法找到可用端口")
+               return
+
+       logger.info(f"啟動Web服務器於 http://{host}:{port}")
+       socketio.run(app, host=host, port=port, debug=debug, allow_unsafe_werkzeug=True)
+   ```
+
+2. **run.py 中傳遞端口參數**（line 139-162）：
+   ```python
+   def start_web_server_in_background():
+       """在後台啟動Web服務器"""
+       try:
+           from web.server import run_server
+           import threading
+
+           # 從環境變量或配置讀取端口
+           web_port = int(os.getenv('WEB_PORT', 5000))
+
+           web_thread = threading.Thread(target=run_server, kwargs={
+               'host': '0.0.0.0',
+               'port': web_port,
+               'debug': False
+           }, daemon=True)
+           web_thread.start()
+
+           logger.info(f"Web服務器已在後台啟動: http://localhost:{web_port}")
+           time.sleep(2)
+       except Exception as e:
+           logger.warning(f"啟動Web服務器失敗: {e}")
+   ```
+
+#### 4.2 在 `daemon_manager.py` 中設置 Web 端口環境變量
+
+在 `_start_bot()` 方法中（line 550-670）：
 
 ```python
-# core/daemon_manager.py 修改
-class TradingBotDaemon:
-    def __init__(self, config_file: str = "config/daemon_config.json", instance_id: str = None):
-        self.instance_id = instance_id
-        self.config_file = Path(config_file)
-        
-        # 實例隔離的目錄和文件
-        if instance_id:
-            self.log_dir = Path(f"logs/{instance_id}")
-            self.pid_file = self.log_dir / "daemon.pid"
-            self.bot_pid_file = self.log_dir / "bot.pid"
-        else:
-            self.log_dir = Path("logs")
-            self.pid_file = self.log_dir / "process.pid"
-            self.bot_pid_file = self.log_dir / "bot.pid"
+# 設置環境變量
+env = os.environ.copy()
+env.update(self.config.get("environment", {}))
+
+# 添加 Web 端口環境變量
+if "web_port" in self.config:
+    env['WEB_PORT'] = str(self.config['web_port'])
 ```
 
-#### **第三步：Web服務改造**
+---
+
+### Phase 5：實例管理工具（0.5 天）
+
+#### 5.1 創建實例管理模塊
+
+創建 `core/instance_manager.py`：
 
 ```python
-# web/server.py 修改
-def find_available_port(start_port: int = 5001):
-    """查找可用端口"""
-    for port in range(start_port, 6000):
-        if is_port_available('0.0.0.0', port):
-            return port
-    return None
+"""
+實例管理器 - 統一管理多個交易機器人實例
+"""
+import json
+from pathlib import Path
+from typing import List, Dict, Optional
+from datetime import datetime
+import psutil
 
-# 實例管理API
-@app.route('/api/instances', methods=['GET'])
-def list_instances():
+class InstanceRegistry:
+    """實例註冊表"""
+
+    def __init__(self, registry_file: str = "logs/instances.json"):
+        self.registry_file = Path(registry_file)
+        self.registry_file.parent.mkdir(exist_ok=True)
+
+    def register(self, instance_id: str, info: Dict) -> None:
+        """註冊實例"""
+        registry = self.load()
+        registry[instance_id] = {
+            **info,
+            "registered_at": datetime.now().isoformat()
+        }
+        self.save(registry)
+
+    def unregister(self, instance_id: str) -> None:
+        """註銷實例"""
+        registry = self.load()
+        if instance_id in registry:
+            del registry[instance_id]
+            self.save(registry)
+
+    def load(self) -> Dict:
+        """加載註冊表"""
+        if not self.registry_file.exists():
+            return {}
+
+        with open(self.registry_file, 'r') as f:
+            return json.load(f)
+
+    def save(self, registry: Dict) -> None:
+        """保存註冊表"""
+        with open(self.registry_file, 'w') as f:
+            json.dump(registry, f, indent=2)
+
+    def list_instances(self) -> List[Dict]:
+        """列出所有實例"""
+        registry = self.load()
+        instances = []
+
+        for instance_id, info in registry.items():
+            # 檢查進程是否還在運行
+            is_alive = False
+            try:
+                pid = info.get('pid')
+                if pid and psutil.pid_exists(pid):
+                    process = psutil.Process(pid)
+                    if process.is_running():
+                        is_alive = True
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+
+            instances.append({
+                "instance_id": instance_id,
+                "is_alive": is_alive,
+                **info
+            })
+
+        return instances
+
+    def cleanup_dead_instances(self) -> int:
+        """清理已死亡的實例記錄"""
+        registry = self.load()
+        dead_instances = []
+
+        for instance_id, info in registry.items():
+            pid = info.get('pid')
+            if pid:
+                try:
+                    if not psutil.pid_exists(pid):
+                        dead_instances.append(instance_id)
+                except Exception:
+                    dead_instances.append(instance_id)
+
+        for instance_id in dead_instances:
+            del registry[instance_id]
+
+        if dead_instances:
+            self.save(registry)
+
+        return len(dead_instances)
+```
+
+#### 5.2 添加命令行工具
+
+在 `cli/` 目錄下創建 `instance_cli.py`：
+
+```python
+"""
+實例管理命令行工具
+"""
+import argparse
+from core.instance_manager import InstanceRegistry
+from tabulate import tabulate
+
+def list_instances_cmd():
     """列出所有實例"""
-    instances = []
-    for config_file in Path("config/instances").glob("*_config.json"):
-        instance_id = config_file.stem.replace("_config", "")
-        instances.append({
-            'id': instance_id,
-            'status': get_instance_status(instance_id)
-        })
-    return jsonify(instances)
+    registry = InstanceRegistry()
+    instances = registry.list_instances()
+
+    if not instances:
+        print("沒有運行中的實例")
+        return
+
+    # 格式化輸出
+    headers = ["實例ID", "狀態", "PID", "Web端口", "配置文件", "啟動時間"]
+    rows = []
+
+    for inst in instances:
+        status = "🟢 運行中" if inst['is_alive'] else "🔴 已停止"
+        rows.append([
+            inst['instance_id'],
+            status,
+            inst.get('pid', 'N/A'),
+            inst.get('web_port', 'N/A'),
+            inst.get('config_file', 'N/A'),
+            inst.get('started_at', 'N/A')
+        ])
+
+    print(tabulate(rows, headers=headers, tablefmt='grid'))
+
+def cleanup_instances_cmd():
+    """清理已停止的實例記錄"""
+    registry = InstanceRegistry()
+    count = registry.cleanup_dead_instances()
+    print(f"已清理 {count} 個已停止的實例記錄")
+
+def main():
+    parser = argparse.ArgumentParser(description='實例管理工具')
+    subparsers = parser.add_subparsers(dest='command', help='命令')
+
+    # list 命令
+    subparsers.add_parser('list', help='列出所有實例')
+
+    # cleanup 命令
+    subparsers.add_parser('cleanup', help='清理已停止的實例記錄')
+
+    args = parser.parse_args()
+
+    if args.command == 'list':
+        list_instances_cmd()
+    elif args.command == 'cleanup':
+        cleanup_instances_cmd()
+    else:
+        parser.print_help()
+
+if __name__ == '__main__':
+    main()
 ```
 
-#### **第四步：實例管理腳本**
+---
+
+## 4. 使用指南
+
+### 4.1 創建多個實例配置
 
 ```bash
-#!/bin/bash
-# scripts/manage_instances.sh
-
-start_instance() {
-    local instance_id=$1
-    echo "啟動實例: $instance_id"
-    python core/daemon_manager.py start --instance-id $instance_id --daemon
-}
-
-stop_instance() {
-    local instance_id=$1
-    echo "停止實例: $instance_id"
-    python core/daemon_manager.py stop --instance-id $instance_id
-}
-
-list_instances() {
-    echo "運行中的實例:"
-    ps aux | grep "[r]un.py.*--instance-id" | awk '{print $2, $NF}'
-}
-```
-
-### 🛠 **配置範例**
-
-#### 實例1配置：`config/instances/backpack_sol.json`
-```json
+# 實例 1：Backpack SOL 永續網格
+cat > config/active/bp_sol_01.json << 'EOF'
 {
-  "instance_id": "backpack_sol",
-  "instance_name": "Backpack SOL 做市",
-  "python_path": ".venv/bin/python3",
-  "script_path": "run.py",
-  "working_dir": ".",
-  "log_dir": "logs/backpack_sol",
-  "web_port": 5001,
-  "db_path": "database/backpack_sol.db",
-  "environment": {
-    "BACKPACK_KEY": "${BACKPACK_KEY_1}",
-    "BACKPACK_SECRET": "${BACKPACK_SECRET_1}"
+  "metadata": {
+    "name": "Backpack SOL Grid Instance 1",
+    "instance_id": "bp_sol_01",
+    "exchange": "backpack",
+    "symbol": "SOL_USDC_PERP",
+    "market_type": "perp",
+    "strategy": "perp_grid"
   },
-  "bot_args": [
-    "--exchange", "backpack",
-    "--symbol", "SOL_USDC",
-    "--spread", "0.3",
-    "--strategy", "standard",
-    "--duration", "86400"
-  ]
+  "daemon_config": {
+    "python_path": ".venv/bin/python3",
+    "script_path": "run.py",
+    "working_dir": ".",
+    "log_dir": "logs/bp_sol_01",
+    "db_path": "database/bp_sol_01.db",
+    "web_port": 5001,
+    "bot_args": [
+      "--exchange", "backpack",
+      "--symbol", "SOL_USDC_PERP",
+      "--strategy", "perp_grid",
+      "--grid-lower", "140",
+      "--grid-upper", "160",
+      "--grid-num", "20",
+      "--max-position", "10",
+      "--duration", "86400",
+      "--interval", "60"
+    ]
+  },
+  "exchange_config": {
+    "api_key": "${BACKPACK_KEY}",
+    "secret_key": "${BACKPACK_SECRET}",
+    "base_url": "https://api.backpack.work"
+  },
+  "strategy_config": {
+    "grid_lower_price": 140,
+    "grid_upper_price": 160,
+    "grid_num": 20
+  }
 }
-```
+EOF
 
-#### 實例2配置：`config/instances/aster_btc.json`
-```json
+# 實例 2：Backpack ETH 永續網格
+cat > config/active/bp_eth_02.json << 'EOF'
 {
-  "instance_id": "aster_btc",
-  "instance_name": "Aster BTC 永續網格",
-  "python_path": ".venv/bin/python3",
-  "script_path": "run.py",
-  "working_dir": ".",
-  "log_dir": "logs/aster_btc",
-  "web_port": 5002,
-  "db_path": "database/aster_btc.db",
-  "environment": {
-    "ASTER_API_KEY": "${ASTER_API_KEY_1}",
-    "ASTER_SECRET_KEY": "${ASTER_SECRET_KEY_1}"
+  "metadata": {
+    "name": "Backpack ETH Grid Instance 2",
+    "instance_id": "bp_eth_02",
+    "exchange": "backpack",
+    "symbol": "ETH_USDC_PERP",
+    "market_type": "perp",
+    "strategy": "perp_grid"
   },
-  "bot_args": [
-    "--exchange", "aster",
-    "--symbol", "BTCUSDT",
-    "--market-type", "perp",
-    "--strategy", "perp_grid",
-    "--grid-num", "20",
-    "--grid-type", "neutral"
-  ]
+  "daemon_config": {
+    "python_path": ".venv/bin/python3",
+    "script_path": "run.py",
+    "working_dir": ".",
+    "log_dir": "logs/bp_eth_02",
+    "db_path": "database/bp_eth_02.db",
+    "web_port": 5002,
+    "bot_args": [
+      "--exchange", "backpack",
+      "--symbol", "ETH_USDC_PERP",
+      "--strategy", "perp_grid",
+      "--grid-lower", "2800",
+      "--grid-upper", "3200",
+      "--grid-num", "15",
+      "--max-position", "5",
+      "--duration", "86400",
+      "--interval", "60"
+    ]
+  },
+  "exchange_config": {
+    "api_key": "${BACKPACK_KEY}",
+    "secret_key": "${BACKPACK_SECRET}",
+    "base_url": "https://api.backpack.work"
+  },
+  "strategy_config": {
+    "grid_lower_price": 2800,
+    "grid_upper_price": 3200,
+    "grid_num": 15
+  }
 }
+EOF
 ```
 
-### 🚀 **部署流程**
-
-1. **準備環境變量**
-```bash
-# ~/.bashrc 或 .env
-export BACKPACK_KEY_1="your_backpack_key_1"
-export BACKPACK_SECRET_1="your_backpack_secret_1"
-export ASTER_API_KEY_1="your_aster_key_1"
-export ASTER_SECRET_KEY_1="your_aster_secret_1"
-```
-
-2. **創建實例配置**
-```bash
-# 複製模板並修改
-cp config/templates/instance_template.json config/instances/my_bot.json
-# 編輯配置文件
-vim config/instances/my_bot.json
-```
-
-3. **啟動實例**
-```bash
-# 啟動單個實例
-python core/daemon_manager.py start --instance-id my_bot --daemon
-
-# 或使用腳本批量啟動
-./scripts/start_all_instances.sh
-```
-
-4. **監控實例**
-```bash
-# 查看所有實例狀態
-python core/daemon_manager.py list-instances
-
-# 查看特定實例日誌
-tail -f logs/my_bot/trading_bot_daemon.log
-```
-
-### ⚠️ **注意事項**
-
-1. **資源監控**：確保服務器有足夠資源支持多實例並發運行
-2. **API限制**：注意交易所的API頻率限制，可能需要實例間協調
-3. **風險隔離**：每個實例應有獨立的風險控制機制
-4. **備份策略**：定期備份各實例的配置和數據庫
-
-### 📊 **總結**
-
-**修改難度評分：3/10** ⭐⭐⭐
-
-這是一個**相對簡單**的改造，主要工作集中在配置隔離和進程管理上。你的系統架構已經相當模組化，為多實例運行提供了良好的基礎。
-
-關鍵優勢：
-- ✅ 現有代碼復用率高
-- ✅ 實施風險低
-- ✅ 維護成本可控
-- ✅ 擴展性良好
-
-## 網格調整功能兼容性分析
-
-### ✅ **好消息：基本沒有負面影響**
-
-你的網格調整功能設計得很好，與多實例方案**高度兼容**，原因如下：
-
-#### 1. **功能實現位置合適**
-- 你的網格調整API端點 `/api/grid/adjust` 已經正確實現
-- 使用的是實例級別的 `current_strategy` 全局變量
-- 調整邏輯直接調用策略的 `adjust_grid_range()` 方法
-
-#### 2. **多實例下的兼容性**
-在多實例環境下，每個實例會有：
-- **獨立的Web服務端口**（5001, 5002, 5003...）
-- **獨立的策略實例**（每個進程管理自己的 `current_strategy`）
-- **獨立的配置和環境變量**
-
-#### 3. **現有代碼無需修改**
-你的網格調整功能已經考慮了實例隔離：
-```python
-# web/server.py:387-442
-@app.route('/api/grid/adjust', methods=['POST'])
-def adjust_grid_range():
-    """在機器人運行期間調整網格上下限"""
-    global current_strategy
-    
-    if not bot_status.get('running'):
-        return jsonify({'success': False, 'message': '機器人未運行，無法調整網格'}), 400
-    
-    if not current_strategy:
-        return jsonify({'success': False, 'message': '沒有可調整的策略實例'}), 400
-    
-    if not hasattr(current_strategy, 'adjust_grid_range'):
-        return jsonify({'success': False, 'message': '當前策略不支援網格調整'}), 400
-```
-
-### 🎯 **多實例下的使用方式**
-
-實施多實例後，你將這樣使用網格調整功能：
+### 4.2 啟動實例
 
 ```bash
-# 實例1（端口5001）
+# 啟動實例 1
+.venv/bin/python3 core/daemon_manager.py start --config config/active/bp_sol_01.json --daemon
+
+# 啟動實例 2
+.venv/bin/python3 core/daemon_manager.py start --config config/active/bp_eth_02.json --daemon
+
+# 列出所有實例
+.venv/bin/python3 core/daemon_manager.py list
+
+# 或使用實例管理工具
+.venv/bin/python3 cli/instance_cli.py list
+```
+
+### 4.3 管理實例
+
+```bash
+# 查看實例 1 狀態
+.venv/bin/python3 core/daemon_manager.py status --config config/active/bp_sol_01.json
+
+# 停止實例 1
+.venv/bin/python3 core/daemon_manager.py stop --config config/active/bp_sol_01.json
+
+# 重啟實例 2
+.venv/bin/python3 core/daemon_manager.py restart --config config/active/bp_eth_02.json
+
+# 清理已停止的實例記錄
+.venv/bin/python3 cli/instance_cli.py cleanup
+```
+
+### 4.4 訪問 Web UI
+
+```bash
+# 實例 1 Web UI
+http://localhost:5001
+
+# 實例 2 Web UI
+http://localhost:5002
+
+# 健康檢查
+curl http://localhost:5001/health
+curl http://localhost:5002/health
+```
+
+### 4.5 熱調整網格範圍
+
+```bash
+# 調整實例 1 的網格範圍
 curl -X POST http://localhost:5001/api/grid/adjust \
   -H "Content-Type: application/json" \
-  -d '{"grid_upper_price": 3200, "grid_lower_price": 2800}'
+  -d '{
+    "grid_upper_price": 165,
+    "grid_lower_price": 135
+  }'
 
-# 實例2（端口5002）  
+# 調整實例 2 的網格範圍
 curl -X POST http://localhost:5002/api/grid/adjust \
   -H "Content-Type: application/json" \
-  -d '{"grid_upper_price": 52000, "grid_lower_price": 48000}'
-
-# 實例3（端口5003）
-curl -X POST http://localhost:5003/api/grid/adjust \
-  -H "Content-Type: application/json" \
-  -d '{"grid_upper_price": 150, "grid_lower_price": 120}'
+  -d '{
+    "grid_upper_price": 3300,
+    "grid_lower_price": 2700
+  }'
 ```
 
-### 📋 **唯一需要的小調整**
+---
 
-#### Web界面URL調整
-如果你使用Web界面，需要訪問對應實例的端口：
-- 實例1：`http://localhost:5001`
-- 實例2：`http://localhost:5002`
-- 實例3：`http://localhost:5003`
+## 5. 風險管理與最佳實踐
 
-#### CLI命令更新
-你的 `cli/commands.py` 中的網格調整命令需要支持指定端口：
-```python
-# 可能的改進
-def grid_adjust_command():
-    """透過 Web 控制端即時調整網格上下限"""
-    base_url = os.getenv('WEB_BASE_URL', 'http://localhost:5000')  # 可配置
-    endpoint = f"{base_url}/api/grid/adjust"
+### 5.1 API 速率限制
+
+**風險**：多個實例使用同一組 API Key 可能觸發速率限制。
+
+**解決方案**：
+1. 為不同實例使用不同的交易所子賬戶
+2. 調整 `interval` 參數，避免同時查詢（錯開更新時間）
+3. 監控 API 請求頻率
+
+### 5.2 資源監控
+
+**建議配置**：
+- 每個實例約佔用 50-100 MB 內存
+- 建議不超過 5-10 個實例（根據服務器配置）
+- 使用 `htop` 或 `top` 監控資源使用
+
+**監控腳本**：
+```bash
+#!/bin/bash
+# monitor_instances.sh
+watch -n 5 '
+echo "=== 實例狀態 ==="
+.venv/bin/python3 cli/instance_cli.py list
+echo ""
+echo "=== 系統資源 ==="
+free -h
+echo ""
+echo "=== 磁盤空間 ==="
+df -h | grep -E "(Filesystem|/dev/)"
+'
 ```
 
-### 🚀 **實際使用場景**
+### 5.3 錯誤隔離
+
+**優點**：
+- 一個實例崩潰不會影響其他實例
+- 每個實例有獨立的日誌，易於排查
+
+**建議**：
+- 定期檢查日誌目錄大小
+- 設置合理的 `log_retention_days`（建議 2-7 天）
+
+### 5.4 安全注意事項
+
+1. **環境變量保護**：
+   - 確保 `.env` 文件不被提交到 Git
+   - 使用 `chmod 600 .env` 限制權限
+
+2. **API Key 隔離**：
+   - 生產環境建議每個實例使用獨立的 API Key
+   - 使用子賬戶限制權限
+
+3. **Web UI 訪問控制**：
+   - 生產環境建議使用 Nginx 反向代理
+   - 添加 HTTP Basic Auth 或其他認證機制
+
+---
+
+## 6. 故障排查
+
+### 6.1 常見問題
+
+**Q1: 第二個實例啟動失敗，提示 "PID file already exists"**
+
+**A:** 可能是第一個實例的 PID 文件與第二個實例衝突。檢查：
+```bash
+# 檢查是否使用了相同的 instance_id
+cat config/active/instance1.json | grep instance_id
+cat config/active/instance2.json | grep instance_id
+
+# 清理殭屍 PID 文件
+.venv/bin/python3 cli/instance_cli.py cleanup
+```
+
+**Q2: Web UI 無法訪問**
+
+**A:** 檢查端口是否被佔用：
+```bash
+# 檢查端口
+netstat -tlnp | grep 5001
+netstat -tlnp | grep 5002
+
+# 查看實例日誌
+tail -f logs/bp_sol_01/2025-11-28/bot_stderr.log
+```
+
+**Q3: 數據庫鎖定錯誤**
+
+**A:** 確認每個實例使用獨立的數據庫文件：
+```bash
+# 檢查配置
+cat config/active/bp_sol_01.json | grep db_path
+cat config/active/bp_eth_02.json | grep db_path
+
+# 查看數據庫文件
+ls -lh database/
+```
+
+### 6.2 日誌查看
 
 ```bash
-# 啟動3個不同策略的實例
-python core/daemon_manager.py start --instance-id backpack_sol --daemon
-python core/daemon_manager.py start --instance-id aster_btc --daemon  
-python core/daemon_manager.py start --instance-id paradex_eth --daemon
+# 查看守護進程日誌
+tail -f logs/bp_sol_01/2025-11-28/daemon.log
 
-# 分別調整各實例的網格參數
-python cli/commands.py --port 5001 grid-adjust --upper 3200 --lower 2800
-python cli/commands.py --port 5002 grid-adjust --upper 52000 --lower 48000  
-python cli/commands.py --port 5003 grid-adjust --upper 1500 --lower 1200
+# 查看策略運行日誌
+tail -f logs/bp_sol_01/2025-11-28/bot_stdout.log
+tail -f logs/bp_sol_01/2025-11-28/bot_stderr.log
+
+# 查看所有實例的錯誤日誌
+tail -f logs/*/2025-11-28/bot_stderr.log
 ```
 
-### 💡 **結論**
+---
 
-**你的網格調整功能與多實例方案完美兼容！** 
+## 7. 實施檢查清單
 
-- ✅ **無需修改核心邏輯**
-- ✅ **天然支持實例隔離**  
-- ✅ **每個實例獨立調整**
-- ✅ **不會相互干擾**
+### Phase 1: 配置結構擴展
+- [ ] 更新配置文件模板，添加 `instance_id`、`log_dir`、`db_path`、`web_port`
+- [ ] 創建兩個測試配置文件（`bp_sol_01.json` 和 `bp_eth_02.json`）
+- [ ] 驗證環境變量展開功能
 
-這是一個很好的例子，說明你的系統架構設計得相當不錯，已經考慮了擴展性。多實例改造主要是配置和進程管理層面的工作，不會影響你已經實現的業務功能。
+### Phase 2: 守護進程改造
+- [ ] 修改 `__init__` 方法，支持 `instance_id` 參數
+- [ ] 實現實例註冊機制（`_register_instance`, `_unregister_instance`）
+- [ ] 修改日誌路徑邏輯
+- [ ] 修改 PID 文件路徑
+- [ ] 添加 `list` 命令到 CLI
+- [ ] 測試單實例啟動
 
-## 最終結論
+### Phase 3: 數據庫隔離
+- [ ] 檢查 `database/db.py`，確認支持動態路徑
+- [ ] 修改策略初始化，傳遞正確的數據庫路徑
 
-經過全面分析，我可以明確回答：
+### Phase 4: Web 服務器改造
+- [ ] 修改 `run_server()` 支持動態端口
+- [ ] 在 `daemon_manager.py` 中設置 `WEB_PORT` 環境變量
+- [ ] 測試不同端口啟動
 
-### 💡 **核心答案**
+### Phase 5: 實例管理工具
+- [ ] 創建 `core/instance_manager.py`
+- [ ] 創建 `cli/instance_cli.py`
+- [ ] 測試 `list` 和 `cleanup` 命令
 
-**修改難度不大** - 你的系統架構已經相當完善，支持多實例運行主要是**配置隔離**和**進程管理**的問題，而不是核心邏輯的重構。
+### Phase 6: 集成測試
+- [ ] 同時啟動兩個實例
+- [ ] 驗證 PID、日誌、數據庫隔離
+- [ ] 驗證 Web UI 訪問
+- [ ] 測試實例停止和重啟
+- [ ] 測試網格熱調整功能
+- [ ] 壓力測試（啟動 5 個實例）
 
-### 🎯 **推薦實施路徑**
+---
 
-採用**實例ID隔離方案**，具體優勢：
+## 8. 預期工作量與時間表
 
-1. **開發週期短**：2-3天即可完成
-2. **風險可控**：對現有代碼影響最小
-3. **向後兼容**：不影響現有單實例用戶
-4. **維護簡單**：結構清晰，易於排查問題
+| 階段 | 工作量 | 優先級 | 依賴 |
+|------|--------|--------|------|
+| Phase 1: 配置結構擴展 | 0.5 天 | P0 | 無 |
+| Phase 2: 守護進程改造 | 1 天 | P0 | Phase 1 |
+| Phase 3: 數據庫隔離 | 0.5 天 | P0 | Phase 2 |
+| Phase 4: Web 服務器改造 | 1 天 | P0 | Phase 2 |
+| Phase 5: 實例管理工具 | 0.5 天 | P1 | Phase 2 |
+| Phase 6: 集成測試 | 0.5 天 | P0 | All |
 
-### 📊 **難度評分：3/10** ⭐⭐⭐
+**總計：約 4 天**（假設全職開發，實際可能需要 1-2 週）
 
-這是一個**相對簡單**的改造，主要原因：
-- 你的系統已經有良好的模組化設計
-- 配置管理集中且靈活
-- 守護進程機制完善
-- Web服務架構清晰
+---
 
-### 🚀 **立即可行的第一步**
+## 9. 後續改進建議
 
-你可以立即開始嘗試：
+### 9.1 短期改進（1-2 週）
 
-1. **創建第二個配置文件**：
-   ```bash
-   cp config/daemon_config.json config/daemon_config_2.json
-   ```
+1. **統一 Web UI**（可選）
+   - 創建一個主控制台，列出所有實例
+   - 支持從單一界面切換和控制不同實例
 
-2. **修改環境變量**：
-   ```bash
-   export BACKPACK_KEY_2="your_second_api_key"
-   export BACKPACK_SECRET_2="your_second_secret"
-   ```
+2. **實例自動恢復**
+   - 系統重啟後自動恢復之前運行的實例
 
-3. **使用不同端口啟動**：
-   ```bash
-   python core/daemon_manager.py start --config config/daemon_config_2.json --daemon
-   ```
+3. **配置熱重載**
+   - 修改配置文件後自動重啟實例
 
-### 💰 **投資回報比**
+### 9.2 長期改進（1-2 個月）
 
-- **時間投入**：2-3天
-- **收益**：支持無限多個實例，每個獨立API密鑰和配置
-- **風險**：極低，主要是配置文件調整
+1. **Docker 容器化**
+   - 每個實例運行在獨立的 Docker 容器中
+   - 使用 Docker Compose 管理多實例
 
-這是一個**高性價比**的改造，能夠快速滿足你同時運行多個trading bot的需求，且為未來的擴展奠定了良好基礎。
+2. **監控告警系統**
+   - Prometheus + Grafana 監控
+   - 異常情況自動告警（釘釘、郵件、Telegram）
+
+3. **集中式日誌管理**
+   - ELK Stack (Elasticsearch + Logstash + Kibana)
+   - 統一查看和搜索所有實例日誌
+
+4. **配置管理 UI**
+   - Web 界面創建、編輯、管理配置文件
+   - 配置版本控制和回滾
+
+---
+
+## 10. 總結與下一步
+
+### ✅ 可行性評估
+
+**結論：高度可行**
+
+- 現有架構已具備 80% 的基礎設施
+- 主要工作是資源隔離和實例管理
+- 預計 4 天開發時間即可完成核心功能
+
+### 🚀 建議的實施順序
+
+1. **先完成 Phase 1-4**（3 天）：實現基本的多實例運行
+2. **測試驗證**（0.5 天）：確保兩個實例可以穩定並發運行
+3. **補充 Phase 5**（0.5 天）：添加管理工具
+4. **生產部署**：根據實際需求調整配置
+
+### 📋 下一步行動
+
+**請確認以下事項，我將開始實施：**
+
+1. ✅ 是否認可這個技術方案？
+2. ✅ 是否需要調整某些設計細節？
+3. ✅ 優先實施哪些 Phase？（建議先做 Phase 1-4）
+4. ✅ 是否需要先進行原型驗證？
+
+**準備就緒後，我將按照以下順序開始實施：**
+1. 創建示例配置文件
+2. 修改 `daemon_manager.py`
+3. 測試雙實例啟動
+4. 完善文檔和使用指南
+
+---
+
+**文檔版本**：2.0
+**作者**：Claude Code
+**最後更新**：2025-11-28
+**審閱狀態**：待用戶確認
+
+---
+
+## 附錄：參考資料
+
+- 原始需求：`multi_perp_grid_bot_analysis_20251127.md`（已刪除）
+- 配置管理代碼：`core/config_manager.py`
+- 守護進程代碼：`core/daemon_manager.py`
+- 項目架構：`CLAUDE.md`

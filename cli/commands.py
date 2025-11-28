@@ -940,6 +940,25 @@ def grid_adjust_command():
     base_url = base_url_input or default_base
     base_url = base_url.rstrip('/')
 
+    # URL 驗證
+    validator = CliValidator()
+    is_valid, errors = validator.validate({'base_url': base_url})
+    
+    if not is_valid:
+        error_messages = []
+        for field, field_errors in errors.items():
+            error_messages.extend(field_errors)
+        
+        print(f"❌ 錯誤: {'; '.join(error_messages)}")
+        print("\n📋 安全提示:")
+        print("  只允許訪問本地或內網地址，例如:")
+        print("    - http://127.0.0.1:5000")
+        print("    - https://localhost:5000")
+        print("    - http://192.168.1.100:5000")
+        print("    - http://10.0.0.50:5000")
+        print("  不允許訪問外部網址，防止 SSRF 攻擊")
+        return
+
     lower_input = input("新的網格下限價格 (留空沿用當前設定): ").strip()
     upper_input = input("新的網格上限價格 (留空沿用當前設定): ").strip()
 
@@ -951,35 +970,47 @@ def grid_adjust_command():
         if upper_input:
             payload['grid_upper_price'] = float(upper_input)
     except ValueError:
-        print("錯誤: 請輸入有效的數值。")
+        print("❌ 錯誤: 請輸入有效的數值。")
         return
 
     if not payload:
-        print("未輸入任何新範圍，操作已取消。")
+        print("⚠️  未輸入任何新範圍，操作已取消。")
         return
 
     endpoint = f"{base_url}/api/grid/adjust"
-    print(f"正在向 {endpoint} 發送調整請求...")
+    print(f"🔄 正在向 {endpoint} 發送調整請求...")
 
     try:
-        response = requests.post(endpoint, json=payload, timeout=15)
+        # 添加超時和驗證
+        response = requests.post(
+            endpoint,
+            json=payload,
+            timeout=15,
+            headers={'Content-Type': 'application/json'}
+        )
+    except requests.exceptions.Timeout:
+        print("❌ 錯誤: 請求超時，請檢查網絡連接或服務器狀態")
+        return
+    except requests.exceptions.ConnectionError:
+        print("❌ 錯誤: 無法連接到服務器，請檢查地址是否正確")
+        return
     except requests.RequestException as exc:
-        print(f"發送請求失敗: {exc}")
+        print(f"❌ 錯誤: 發送請求失敗: {exc}")
         return
 
     try:
         result = response.json()
     except ValueError:
-        print(f"服務端返回非JSON響應: {response.text}")
+        print(f"❌ 錯誤: 服務端返回非JSON響應: {response.text}")
         return
 
     if response.ok and result.get('success'):
         lower = result.get('grid_lower_price')
         upper = result.get('grid_upper_price')
-        print(f"網格範圍調整成功，新區間: {lower} ~ {upper}")
+        print(f"✅ 網格範圍調整成功，新區間: {lower} ~ {upper}")
     else:
         message = result.get('message') if isinstance(result, dict) else response.text
-        print(f"網格調整失敗: {message}")
+        print(f"❌ 網格調整失敗: {message}")
 
 def rebalance_settings_command():
     """重平設置管理命令"""

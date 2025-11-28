@@ -40,6 +40,7 @@ class MarketMaker:
         secret_key,
         symbol,
         db_instance=None,
+        db_path=None,
         base_spread_percentage=0.2,
         order_quantity=None,
         max_orders=3,
@@ -83,7 +84,13 @@ class MarketMaker:
         self.db_enabled = bool(enable_database)
         self.db = None
         if self.db_enabled:
-            self.db = db_instance if db_instance else Database()
+            if db_instance:
+                self.db = db_instance
+            elif db_path:
+                self.db = Database(db_path=db_path)
+                logger.info(f"使用數據庫路徑: {db_path}")
+            else:
+                self.db = Database()
         elif db_instance and hasattr(db_instance, 'close'):
             try:
                 db_instance.close()

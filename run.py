@@ -9,7 +9,7 @@ import os
 import time
 import signal
 from typing import Optional
-from config import ENABLE_DATABASE
+from config import ENABLE_DATABASE, DB_PATH
 from core.logger import setup_logger
 
 # 創建記錄器
@@ -141,22 +141,26 @@ def start_web_server_in_background():
     try:
         from web.server import run_server
         import threading
-        
+
+        # 從環境變量或配置讀取端口
+        web_port = int(os.getenv('WEB_PORT', '5000'))
+        web_host = os.getenv('WEB_HOST', '0.0.0.0')
+
         # 在後台線程中啟動Web服務器
         web_thread = threading.Thread(target=run_server, kwargs={
-            'host': '0.0.0.0',
-            'port': 5000,
+            'host': web_host,
+            'port': web_port,
             'debug': False
         }, daemon=True)
         web_thread.start()
-        
-        logger.info("Web服務器已在後台啟動，可通過 http://localhost:5000 訪問")
-        logger.info("健康檢查端點: http://localhost:5000/health")
-        logger.info("詳細狀態端點: http://localhost:5000/health/detailed")
-        
+
+        logger.info(f"Web服務器已在後台啟動，可通過 http://localhost:{web_port} 訪問")
+        logger.info(f"健康檢查端點: http://localhost:{web_port}/health")
+        logger.info(f"詳細狀態端點: http://localhost:{web_port}/health/detailed")
+
         # 等待一下讓服務器有時間啟動
         time.sleep(2)
-        
+
     except Exception as e:
         logger.warning(f"啟動Web服務器失敗: {e}")
         logger.info("策略將繼續運行，但Web界面不可用")
@@ -296,6 +300,10 @@ def main():
 
             strategy_name = args.strategy
 
+            # 獲取數據庫路徑（優先從環境變量讀取，支持多實例隔離）
+            db_path = os.getenv('DB_PATH', DB_PATH)
+            logger.info(f"數據庫路徑: {db_path}")
+
             # 網格策略處理
             if strategy_name == 'grid':
                 logger.info("啟動現貨網格交易策略")
@@ -319,7 +327,8 @@ def main():
                     grid_mode=args.grid_mode,
                     exchange=exchange,
                     exchange_config=exchange_config,
-                    enable_database=args.enable_db
+                    enable_database=args.enable_db,
+                    db_path=db_path
                 )
 
             elif strategy_name == 'perp_grid':
@@ -359,7 +368,8 @@ def main():
                     enable_boundary_check=args.enable_boundary_check,
                     exchange=exchange,
                     exchange_config=exchange_config,
-                    enable_database=args.enable_db
+                    enable_database=args.enable_db,
+                    db_path=db_path
                 )
 
                 if args.stop_loss is not None:
@@ -387,9 +397,10 @@ def main():
                         inventory_skew=args.inventory_skew,
                         stop_loss=args.stop_loss,
                         take_profit=args.take_profit,
-                            exchange=exchange,
+                        exchange=exchange,
                         exchange_config=exchange_config,
                         enable_database=args.enable_db,
+                        db_path=db_path,
                         market_type='perp'
                     )
                 else:
@@ -406,9 +417,10 @@ def main():
                         inventory_skew=args.inventory_skew,
                         stop_loss=args.stop_loss,
                         take_profit=args.take_profit,
-                            exchange=exchange,
+                        exchange=exchange,
                         exchange_config=exchange_config,
-                        enable_database=args.enable_db
+                        enable_database=args.enable_db,
+                        db_path=db_path
                     )
 
                 if args.stop_loss is not None:
@@ -424,9 +436,10 @@ def main():
                         symbol=args.symbol,
                         base_spread_percentage=args.spread,
                         order_quantity=args.quantity,
-                            exchange=exchange,
+                        exchange=exchange,
                         exchange_config=exchange_config,
                         enable_database=args.enable_db,
+                        db_path=db_path,
                         market_type='spot'
                     )
                 else:
@@ -463,9 +476,10 @@ def main():
                         enable_rebalance=enable_rebalance,
                         base_asset_target_percentage=base_asset_target_percentage,
                         rebalance_threshold=rebalance_threshold,
-                            exchange=exchange,
+                        exchange=exchange,
                         exchange_config=exchange_config,
-                        enable_database=args.enable_db
+                        enable_database=args.enable_db,
+                        db_path=db_path
                     )
             
             # 註冊策略到 Web 控制端（用於熱調整等功能）

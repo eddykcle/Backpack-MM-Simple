@@ -1050,26 +1050,21 @@ def find_available_port(host: str, start_port: int = 5001, end_port: int = 6000)
 
 def run_server(host='0.0.0.0', port=5000, debug=False):
     """運行Web服務器"""
-    # 從 .env 讀取配置
-    web_host = os.getenv('WEB_HOST', '127.0.0.1')
-    web_port = int(os.getenv('WEB_PORT', '5000'))
-    web_debug = os.getenv('WEB_DEBUG', 'false').lower() in ('true', '1', 'yes')
-
-    # 使用環境變量的配置（如果有的話）
-    host = web_host if web_host else host
-    port = web_port if web_port else port
-    debug = web_debug
+    # 優先從環境變量讀取配置，否則使用參數傳入的值
+    host = os.getenv('WEB_HOST', host)
+    port = int(os.getenv('WEB_PORT', str(port)))
+    debug = os.getenv('WEB_DEBUG', 'false').lower() in ('true', '1', 'yes')
 
     # 檢查端口是否可用
     if not is_port_available(host, port):
         logger.warning(f"端口 {port} 已被佔用，正在尋找可用端口...")
-        new_port = find_available_port(host, 5001, 6000)
+        new_port = find_available_port(host, port + 1, 6000)
 
         if new_port:
             logger.info(f"找到可用端口: {new_port}")
             port = new_port
         else:
-            logger.error("無法在 5001-6000 範圍內找到可用端口，服務器啟動失敗")
+            logger.error(f"無法在 {port+1}-6000 範圍內找到可用端口，服務器啟動失敗")
             return
 
     logger.info(f"啟動Web服務器於 http://{host}:{port}")
