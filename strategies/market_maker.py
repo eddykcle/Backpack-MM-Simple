@@ -128,7 +128,7 @@ class MarketMaker:
         self.taker_buy_volume = 0
         self.taker_sell_volume = 0
         self.total_quote_volume = 0.0
-        self.total_fees = 0
+        self.total_fees = 0.0
 
         # 關鍵：在任何可能出錯的代碼之前初始化這些屬性
         # 跟蹤活躍訂單
@@ -1260,7 +1260,7 @@ class MarketMaker:
     def _calculate_session_profit(self):
         """計算本次執行的已實現利潤"""
         if not self.session_buy_trades or not self.session_sell_trades:
-            return 0
+            return 0.0
 
         buy_queue = self.session_buy_trades.copy()
         total_profit = 0
@@ -1293,7 +1293,7 @@ class MarketMaker:
         session_realized_pnl = self._calculate_session_profit()
         
         # 計算未實現利潤
-        unrealized_pnl = 0
+        unrealized_pnl = 0.0
         net_position = self.total_bought - self.total_sold
         
         if net_position > 0:
