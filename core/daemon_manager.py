@@ -1,7 +1,3 @@
-"""
-進程守護管理器
-提供啟動、停止、重啟、狀態檢查等功能，替代 nohup
-"""
 import os
 import sys
 import time
@@ -198,7 +194,12 @@ class TradingBotDaemon:
             return self._load_legacy_config()
     
     def _build_bot_args(self, metadata: Dict, strategy_config: Dict) -> List[str]:
-        """根據配置構建 bot_args"""
+        """根據配置構建 bot_args
+        
+        支持多種鍵名格式，以兼容不同版本的配置文件：
+        - grid_upper_price 和 grid_upper 都能識別為 --grid-upper
+        - grid_lower_price 和 grid_lower 都能識別為 --grid-lower
+        """
         args = []
         
         # 基本參數
@@ -216,23 +217,40 @@ class TradingBotDaemon:
         strategy = metadata.get("strategy", "")
         
         if strategy in ["grid", "perp_grid"]:
-            # 網格策略參數
-            grid_params = [
-                "grid-upper", "grid-lower", "grid-num", "grid-mode", "grid-type",
-                "max-position", "stop-loss", "take-profit",
-                "boundary-action", "boundary-tolerance", "duration", "interval"
-            ]
+            # 網格策略參數 - 支持多種鍵名格式
+            # 鍵名映射：命令行參數 -> [配置文件可能的鍵名列表]
+            grid_param_mapping = {
+                "grid-upper": ["grid_upper_price", "grid_upper"],
+                "grid-lower": ["grid_lower_price", "grid_lower"],
+                "grid-num": ["grid_num"],
+                "grid-mode": ["grid_mode"],
+                "grid-type": ["grid_type"],
+                "max-position": ["max_position"],
+                "quantity": ["order_quantity", "quantity"],
+                "stop-loss": ["stop_loss"],
+                "take-profit": ["take_profit"],
+                "boundary-action": ["boundary_action"],
+                "boundary-tolerance": ["boundary_tolerance"],
+                "enable-boundary-check": ["enable_boundary_check"],
+                "duration": ["duration"],
+                "interval": ["interval"]
+            }
             
-            for param in grid_params:
-                key = param.replace("-", "_")
-                if key in strategy_config:
-                    value = strategy_config[key]
+            for param, possible_keys in grid_param_mapping.items():
+                # 嘗試所有可能的鍵名
+                value = None
+                for key in possible_keys:
+                    if key in strategy_config:
+                        value = strategy_config[key]
+                        break
+                
+                if value is not None:
                     if isinstance(value, bool):
                         if value:
                             args.extend([f"--{param}"])
-                    elif param.startswith("enable") and not value:
-                        args.extend([f"--no-{param}"])
-                    elif value is not None:
+                        elif param.startswith("enable"):
+                            args.extend([f"--disable-{param[7:]}"])
+                    else:
                         args.extend([f"--{param}", str(value)])
         
         elif strategy in ["standard", "perp_standard", "maker_hedge"]:

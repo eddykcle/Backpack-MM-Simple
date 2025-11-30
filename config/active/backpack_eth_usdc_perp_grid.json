@@ -34,18 +34,19 @@
     "default_window": "5000"
   },
   "strategy_config": {
-    "grid_upper_price": 3350,
-    "grid_lower_price": 2875,
-    "grid_num": 48,
+    "grid_upper_price": 3200,
+    "grid_lower_price": 2800,
+    "grid_num": 20,
     "grid_mode": "geometric",
     "grid_type": "long",
-    "max_position": 3.0,
-    "stop_loss": 250,
-    "take_profit": 500,
+    "max_position": 0.18,
+    "order_quantity": 0.009,
+    "stop_loss": 2700,
+    "take_profit": 3500,
     "boundary_action": "emergency_close",
     "boundary_tolerance": 0.001,
     "enable_boundary_check": true,
     "duration": 1209600,
-    "interval": 90
+    "interval": 60
   }
 }

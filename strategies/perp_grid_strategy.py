@@ -1311,7 +1311,16 @@ class PerpGridStrategy(PerpetualMarketMaker):
             open_price: 原始掛單價格（不是成交價格）
             quantity: 成交數量
         """
-        # 找到下一個更高的網格點位
+        # 1. 首先驗證實際持倉
+        net_position = self.get_net_position()
+        if net_position < quantity * 0.9:
+            logger.warning(
+                "實際持倉不足，跳過平倉: 當前淨持倉=%.4f, 需要平倉=%.4f",
+                net_position, quantity
+            )
+            return
+        
+        # 2. 找到下一個更高的網格點位
         next_price = None
         for price in sorted(self.grid_levels):
             if price > open_price:
@@ -1322,12 +1331,21 @@ class PerpGridStrategy(PerpetualMarketMaker):
             logger.warning("開多價格 %.4f 已經是最高網格，無法掛平多單", open_price)
             return
 
+        # 3. 檢查價格合理性（避免過於接近市場價格）
+        current_price = self.get_current_price()
+        if current_price and next_price <= current_price * 1.001:  # 至少 0.1% 的緩衝
+            logger.warning(
+                "平倉價格 %.4f 過於接近市場價 %.4f (差距 < 0.1%%)，跳過以避免立即成交錯誤",
+                next_price, current_price
+            )
+            return
+
         logger.info("開多成交後在價格 %.4f 掛平多單 (開倉價格: %.4f)", next_price, open_price)
 
-        # 延遲一下，等待持倉更新（解決 reduce-only 時序問題）
+        # 4. 延遲一下，等待持倉更新（解決 reduce-only 時序問題）
         time.sleep(0.5)
 
-        # 查詢持倉確認
+        # 5. 再次確認持倉（雙重驗證）
         net_position = self.get_net_position()
         logger.debug("當前淨持倉: %.4f, 檢查是否可以掛平多單", net_position)
 
@@ -1343,46 +1361,70 @@ class PerpGridStrategy(PerpetualMarketMaker):
             reduce_only = True
             logger.debug("持倉足夠，使用 reduce_only 掛平倉單")
 
-        # 掛平倉單（使用 post_only 確保只能作為 Maker 成交）
-        result = self.open_short(
-            quantity=quantity,
-            price=next_price,
-            order_type="Limit",
-            reduce_only=reduce_only,
-            post_only=True  # 強制 Post-Only
-        )
+        # 6. 掛平倉單（使用 post_only 確保只能作為 Maker 成交）
+        max_retries = 2
+        retry_count = 0
+        
+        while retry_count < max_retries:
+            result = self.open_short(
+                quantity=quantity,
+                price=next_price,
+                order_type="Limit",
+                reduce_only=reduce_only,
+                post_only=True  # 強制 Post-Only
+            )
 
-        if isinstance(result, dict) and "error" in result:
-            error_msg = result.get('error', '')
-            logger.error("掛平多單失敗: %s", error_msg)
-
-            # 如果還是 reduce-only 錯誤，重試一次不使用 reduce_only
-            if "Reduce only" in error_msg and reduce_only:
-                logger.info("重試不使用 reduce_only...")
-                time.sleep(0.5)
-                result = self.open_short(
-                    quantity=quantity,
-                    price=next_price,
-                    order_type="Limit",
-                    reduce_only=False,
-                    post_only=True  # 重試時也使用 Post-Only
-                )
-                if isinstance(result, dict) and "error" in result:
-                    logger.error("重試仍失敗: %s", result.get('error', ''))
+            if isinstance(result, dict) and "error" in result:
+                error_msg = result.get('error', '')
+                
+                # 如果是立即成交錯誤，調整價格後重試
+                if "immediately match" in error_msg.lower():
+                    if retry_count == 0:
+                        # 第一次重試：稍微調整價格（增加 0.05%）
+                        adjusted_price = next_price * 1.0005
+                        logger.warning(
+                            "訂單會立即成交，調整價格後重試: %.4f -> %.4f",
+                            next_price, adjusted_price
+                        )
+                        next_price = adjusted_price
+                        retry_count += 1
+                        time.sleep(0.2)
+                        continue
+                    else:
+                        # 第二次仍然失敗，放棄
+                        logger.error(
+                            "掛平多單失敗（重試後仍立即成交）: %s，放棄此訂單",
+                            error_msg
+                        )
+                        return
+                
+                # 如果是 reduce-only 錯誤，重試一次不使用 reduce_only
+                elif "Reduce only" in error_msg and reduce_only:
+                    logger.info("重試不使用 reduce_only...")
+                    reduce_only = False
+                    retry_count += 1
+                    time.sleep(0.5)
+                    continue
+                
+                else:
+                    logger.error("掛平多單失敗: %s", error_msg)
                     return
-
             else:
-                return
-
-        # 使用新的記錄系統記錄平倉單
-        primary_id, alias_ids = self._extract_order_identifiers(result)
-        order_id = primary_id or result.get('id')
-        if order_id:
-            self._record_close_order(order_id, open_price, quantity, 'long', aliases=alias_ids)
-            
-            # 計算潛在網格利潤
-            grid_profit = (next_price - open_price) * quantity
-            logger.info("掛出平多單，潛在利潤: %.4f %s", grid_profit, self.quote_asset)
+                # 成功
+                break
+        
+        # 7. 使用新的記錄系統記錄平倉單
+        if isinstance(result, dict) and "error" not in result:
+            primary_id, alias_ids = self._extract_order_identifiers(result)
+            order_id = primary_id or result.get('id')
+            if order_id:
+                self._record_close_order(order_id, open_price, quantity, 'long', aliases=alias_ids)
+                
+                # 計算潛在網格利潤
+                grid_profit = (next_price - open_price) * quantity
+                logger.info("掛出平多單，潛在利潤: %.4f %s", grid_profit, self.quote_asset)
+        else:
+            logger.error("掛平多單最終失敗: %s", result.get('error', 'unknown error'))
 
     def _place_close_short_order(self, open_price: float, quantity: float) -> None:
         """掛平空單
@@ -1391,7 +1433,16 @@ class PerpGridStrategy(PerpetualMarketMaker):
             open_price: 原始掛單價格（不是成交價格）
             quantity: 成交數量
         """
-        # 找到下一個更低的網格點位
+        # 1. 首先驗證實際持倉（空頭持倉為負數）
+        net_position = self.get_net_position()
+        if net_position > -quantity * 0.9:  # 空頭持倉不足（net_position 不夠負）
+            logger.warning(
+                "實際空頭持倉不足，跳過平倉: 當前淨持倉=%.4f, 需要平倉=%.4f",
+                net_position, -quantity
+            )
+            return
+        
+        # 2. 找到下一個更低的網格點位
         next_price = None
         for price in sorted(self.grid_levels, reverse=True):
             if price < open_price:
@@ -1402,12 +1453,21 @@ class PerpGridStrategy(PerpetualMarketMaker):
             logger.warning("開空價格 %.4f 已經是最低網格，無法掛平空單", open_price)
             return
 
+        # 3. 檢查價格合理性（避免過於接近市場價格）
+        current_price = self.get_current_price()
+        if current_price and next_price >= current_price * 0.999:  # 至少 0.1% 的緩衝（平空單是買入，價格不能太高）
+            logger.warning(
+                "平倉價格 %.4f 過於接近市場價 %.4f (差距 < 0.1%%)，跳過以避免立即成交錯誤",
+                next_price, current_price
+            )
+            return
+
         logger.info("開空成交後在價格 %.4f 掛平空單 (開倉價格: %.4f)", next_price, open_price)
 
-        # 延遲一下，等待持倉更新（解決 reduce-only 時序問題）
+        # 4. 延遲一下，等待持倉更新（解決 reduce-only 時序問題）
         time.sleep(0.5)
 
-        # 查詢持倉確認
+        # 5. 再次確認持倉（雙重驗證）
         net_position = self.get_net_position()
         logger.debug("當前淨持倉: %.4f, 檢查是否可以掛平空單", net_position)
 
@@ -1423,46 +1483,70 @@ class PerpGridStrategy(PerpetualMarketMaker):
             reduce_only = True
             logger.debug("持倉足夠，使用 reduce_only 掛平倉單")
 
-        # 掛平倉單（使用 post_only 確保只能作為 Maker 成交）
-        result = self.open_long(
-            quantity=quantity,
-            price=next_price,
-            order_type="Limit",
-            reduce_only=reduce_only,
-            post_only=True  # 強制 Post-Only
-        )
+        # 6. 掛平倉單（使用 post_only 確保只能作為 Maker 成交）
+        max_retries = 2
+        retry_count = 0
+        
+        while retry_count < max_retries:
+            result = self.open_long(
+                quantity=quantity,
+                price=next_price,
+                order_type="Limit",
+                reduce_only=reduce_only,
+                post_only=True  # 強制 Post-Only
+            )
 
-        if isinstance(result, dict) and "error" in result:
-            error_msg = result.get('error', '')
-            logger.error("掛平空單失敗: %s", error_msg)
-
-            # 如果還是 reduce-only 錯誤，重試一次不使用 reduce_only
-            if "Reduce only" in error_msg and reduce_only:
-                logger.info("重試不使用 reduce_only...")
-                time.sleep(0.5)
-                result = self.open_long(
-                    quantity=quantity,
-                    price=next_price,
-                    order_type="Limit",
-                    reduce_only=False,
-                    post_only=True  # 重試時也使用 Post-Only
-                )
-                if isinstance(result, dict) and "error" in result:
-                    logger.error("重試仍失敗: %s", result.get('error', ''))
+            if isinstance(result, dict) and "error" in result:
+                error_msg = result.get('error', '')
+                
+                # 如果是立即成交錯誤，調整價格後重試
+                if "immediately match" in error_msg.lower():
+                    if retry_count == 0:
+                        # 第一次重試：稍微調整價格（降低 0.05%，因為是買入平空）
+                        adjusted_price = next_price * 0.9995
+                        logger.warning(
+                            "訂單會立即成交，調整價格後重試: %.4f -> %.4f",
+                            next_price, adjusted_price
+                        )
+                        next_price = adjusted_price
+                        retry_count += 1
+                        time.sleep(0.2)
+                        continue
+                    else:
+                        # 第二次仍然失敗，放棄
+                        logger.error(
+                            "掛平空單失敗（重試後仍立即成交）: %s，放棄此訂單",
+                            error_msg
+                        )
+                        return
+                
+                # 如果是 reduce-only 錯誤，重試一次不使用 reduce_only
+                elif "Reduce only" in error_msg and reduce_only:
+                    logger.info("重試不使用 reduce_only...")
+                    reduce_only = False
+                    retry_count += 1
+                    time.sleep(0.5)
+                    continue
+                
+                else:
+                    logger.error("掛平空單失敗: %s", error_msg)
                     return
-
             else:
-                return
-
-        # 使用新的記錄系統記錄平倉單
-        primary_id, alias_ids = self._extract_order_identifiers(result)
-        order_id = primary_id or result.get('id')
-        if order_id:
-            self._record_close_order(order_id, open_price, quantity, 'short', aliases=alias_ids)
-            
-            # 計算潛在網格利潤
-            grid_profit = (open_price - next_price) * quantity
-            logger.info("掛出平空單，潛在利潤: %.4f %s", grid_profit, self.quote_asset)
+                # 成功
+                break
+        
+        # 7. 使用新的記錄系統記錄平倉單
+        if isinstance(result, dict) and "error" not in result:
+            primary_id, alias_ids = self._extract_order_identifiers(result)
+            order_id = primary_id or result.get('id')
+            if order_id:
+                self._record_close_order(order_id, open_price, quantity, 'short', aliases=alias_ids)
+                
+                # 計算潛在網格利潤
+                grid_profit = (open_price - next_price) * quantity
+                logger.info("掛出平空單，潛在利潤: %.4f %s", grid_profit, self.quote_asset)
+        else:
+            logger.error("掛平空單最終失敗: %s", result.get('error', 'unknown error'))
 
     def place_limit_orders(self) -> None:
         """放置限價單 - 覆蓋父類方法（增加倉位變化檢測和邊界檢查）"""
@@ -1882,7 +1966,8 @@ class PerpGridStrategy(PerpetualMarketMaker):
                 logger.info(f"平掉所有持倉: {net_position:.4f}")
                 self.close_position(order_type="Market")
             
-            # 停止策略運行
+            # 停止策略運行 (同時設置兩個標誌以確保主循環退出)
+            self._stop_flag = True
             self._stop_trading = True
             self.stop_reason = "價格觸碰網格邊界，已執行緊急平倉"
             
@@ -1905,6 +1990,8 @@ class PerpGridStrategy(PerpetualMarketMaker):
             # 只停止新訂單，保留持倉
             logger.info("停止新訂單但保留持倉")
             self.cancel_existing_orders()
+            # 同時設置兩個標誌以確保主循環退出
+            self._stop_flag = True
             self._stop_trading = True
             self.stop_reason = "價格觸碰網格邊界，已停止新訂單"
             
