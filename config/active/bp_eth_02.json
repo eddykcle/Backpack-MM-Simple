@@ -34,21 +34,21 @@
     "secret_key": "${BACKPACK_SECRET}",
     "base_url": "${BASE_URL:-https://api.backpack.work}",
     "api_version": "v1",
-    "default_window": "5000"
+    "default_window": "5002"
   },
   "strategy_config": {
     "grid_upper_price": 3200,
-    "grid_lower_price": 2800,
-    "grid_num": 15,
+    "grid_lower_price": 2950,
+    "grid_num": 45,
     "grid_mode": "geometric",
     "grid_type": "long",
-    "max_position": 5.0,
+    "max_position": 2.4,
     "stop_loss": 300,
     "take_profit": 600,
     "boundary_action": "emergency_close",
     "boundary_tolerance": 0.001,
     "enable_boundary_check": true,
-    "duration": 86400,
+    "duration": 1209600,
     "interval": 60
   }
 }

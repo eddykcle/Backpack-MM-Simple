@@ -206,45 +206,6 @@ def test_instance_registry():
             pass
 
 
-def test_cli_tool():
-    """測試命令行工具是否可以正常導入"""
-    print("\n" + "=" * 60)
-    print("測試命令行工具")
-    print("=" * 60)
-
-    try:
-        # 測試導入
-        from cli.instance_cli import main
-        print("✅ 成功導入 cli/instance_cli.py")
-
-        # 檢查是否有必要的函數
-        from cli import instance_cli
-        required_functions = [
-            'list_instances_cmd',
-            'cleanup_instances_cmd',
-            'stats_cmd',
-            'validate_cmd',
-            'info_cmd',
-            'main'
-        ]
-
-        for func_name in required_functions:
-            if hasattr(instance_cli, func_name):
-                print(f"✅ 函數 {func_name} 存在")
-            else:
-                print(f"❌ 函數 {func_name} 不存在")
-
-        return True
-
-    except Exception as e:
-        print(f"❌ 測試失敗: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-
-
 if __name__ == "__main__":
     success1 = test_instance_registry()
-    success2 = test_cli_tool()
-
-    sys.exit(0 if (success1 and success2) else 1)
+    sys.exit(0 if success1 else 1)

@@ -154,27 +154,7 @@ class Phase6IntegrationTest:
         except Exception as e:
             self.log_test("CLI list 命令", False, str(e))
     
-    def test_instance_cli(self):
-        """測試實例管理 CLI"""
-        print("\n🖥️  測試實例管理 CLI...")
-        
-        commands = [
-            ([".venv/bin/python3", "cli/instance_cli.py", "list"], "list 命令"),
-            ([".venv/bin/python3", "cli/instance_cli.py", "list", "--all"], "list --all 命令"),
-            ([".venv/bin/python3", "cli/instance_cli.py", "stats"], "stats 命令"),
-            ([".venv/bin/python3", "cli/instance_cli.py", "validate"], "validate 命令"),
-        ]
-        
-        for cmd, name in commands:
-            try:
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-                success = result.returncode == 0
-                self.log_test(f"CLI {name}", success,
-                             f"returncode={result.returncode}" if not success else "")
-            except subprocess.TimeoutExpired:
-                self.log_test(f"CLI {name}", False, "超時")
-            except Exception as e:
-                self.log_test(f"CLI {name}", False, str(e))
+    # Removed legacy instance_cli tests because functionality 已整合至 daemon_manager
     
     def test_web_port_availability(self):
         """測試 Web 端口可用性"""
@@ -408,7 +388,6 @@ def main():
         test.test_config_files()
         test.test_instance_isolation()
         test.test_daemon_manager_cli()
-        test.test_instance_cli()
         test.test_web_port_availability()
         test.test_database_isolation()
         test.test_log_directory_isolation()

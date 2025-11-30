@@ -2306,9 +2306,24 @@ class MarketMaker:
         return False
 
     def stop(self):
-        """停止做市策略"""
+        """停止做市策略
+        
+        執行優雅停止流程：
+        1. 設置停止標誌位
+        2. 主動取消所有未成交訂單
+        3. 關閉 WebSocket 連接
+        """
         logger.info("收到停止信號，正在停止做市策略...")
         self._stop_flag = True
+        self._stop_trading = True
+        
+        # 主動取消所有未成交訂單（確保訂單被取消）
+        try:
+            logger.info("正在取消所有未成交訂單...")
+            self.cancel_existing_orders()
+            logger.info("所有訂單取消完成")
+        except Exception as e:
+            logger.error(f"取消訂單時發生錯誤: {e}")
 
     def run(self, duration_seconds=3600, interval_seconds=60):
         """執行做市策略"""
