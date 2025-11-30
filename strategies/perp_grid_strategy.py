@@ -1966,7 +1966,8 @@ class PerpGridStrategy(PerpetualMarketMaker):
                 logger.info(f"平掉所有持倉: {net_position:.4f}")
                 self.close_position(order_type="Market")
             
-            # 停止策略運行
+            # 停止策略運行 (同時設置兩個標誌以確保主循環退出)
+            self._stop_flag = True
             self._stop_trading = True
             self.stop_reason = "價格觸碰網格邊界，已執行緊急平倉"
             
@@ -1989,6 +1990,8 @@ class PerpGridStrategy(PerpetualMarketMaker):
             # 只停止新訂單，保留持倉
             logger.info("停止新訂單但保留持倉")
             self.cancel_existing_orders()
+            # 同時設置兩個標誌以確保主循環退出
+            self._stop_flag = True
             self._stop_trading = True
             self.stop_reason = "價格觸碰網格邊界，已停止新訂單"
             
