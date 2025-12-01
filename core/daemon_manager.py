@@ -340,9 +340,6 @@ class TradingBotDaemon:
                 self.logger.warning("進程已在運行中", pid=pid)
                 return False
             
-            # 註冊實例到全局註冊表（只在 start 時註冊）
-            self._register_instance()
-            
             self.logger.info("開始啟動守護進程")
             
             if daemonize:
@@ -363,6 +360,10 @@ class TradingBotDaemon:
                 _loggers.clear()
                 self.logger = get_logger("trading_bot_daemon", log_dir=str(self.log_dir))
                 self.process_manager = ProcessManager(str(self.log_dir))
+            
+            # 此時已在最終守護進程中（daemonize=True 時為子進程，否則為原進程）
+            # 使用正確的 PID 註冊實例到全局註冊表
+            self._register_instance()
             
             # 寫入PID文件
             self.process_manager.write_pid_file()

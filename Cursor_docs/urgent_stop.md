@@ -26,8 +26,6 @@ pkill -f daemon_manager
 # 強制終止所有交易機器人
 pkill -f run.py
 
-# 終極手段：終止所有 Python3 進程
-killall -9 python3
 ```
 
 ### 方法 3: 清理殘留文件
