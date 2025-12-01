@@ -64,9 +64,9 @@ class TradingBotDaemon:
 
         # 註冊退出時的清理函數
         atexit.register(self._cleanup_bot_process)
-
-        # 註冊實例到全局註冊表
-        self._register_instance()
+        
+        # 注意：不在 __init__ 中註冊實例，只在 start() 時才註冊
+        # 避免 status/stop 等查詢命令也產生註冊記錄
     
     def _is_multi_config_format(self, config_file: str) -> bool:
         """檢查是否為新的多配置格式"""
@@ -340,6 +340,9 @@ class TradingBotDaemon:
                 self.logger.warning("進程已在運行中", pid=pid)
                 return False
             
+            # 註冊實例到全局註冊表（只在 start 時註冊）
+            self._register_instance()
+            
             self.logger.info("開始啟動守護進程")
             
             if daemonize:
@@ -490,10 +493,15 @@ class TradingBotDaemon:
         return status
     
     def _main_loop(self):
-        """主循環，監控和重啟交易機器人"""
+        """主循環，監控和重啟交易機器人
+        
+        首次啟動時會無條件啟動 bot，之後根據 auto_restart 設置決定是否自動重啟。
+        - auto_restart: 控制 bot 崩潰後是否自動重啟（不影響首次啟動）
+        """
         restart_count = 0
         last_restart_time = 0
         last_log_cleanup_time = time.time()  # 記錄上次日誌清理時間
+        first_start = True  # 標記是否為首次啟動
         
         while self.running:
             try:
@@ -501,36 +509,52 @@ class TradingBotDaemon:
                 bot_running = self._is_bot_running()
                 
                 if bot_running:
-                    # 如果機器人在運行，重置重啟計數器
+                    # 如果機器人在運行，重置重啟計數器和首次啟動標記
+                    first_start = False
                     if restart_count > 0:
                         self.logger.info("交易機器人已恢復運行，重置重啟計數器", 
                                        previous_restart_count=restart_count)
                         restart_count = 0
-                elif self.config.get("auto_restart", True):
-                    # 機器人未運行，嘗試重啟
+                elif first_start or self.config.get("auto_restart", True):
+                    # 首次啟動時無條件啟動 bot，或者 auto_restart 為 True 時自動重啟
                     current_time = time.time()
                     
-                    # 檢查重啟次數限制
-                    if restart_count >= self.config.get("max_restart_attempts", 3):
-                        self.logger.error("達到最大重啟次數，停止自動重啟", 
-                                        max_attempts=self.config["max_restart_attempts"])
-                        break
+                    # 首次啟動不受重啟次數限制
+                    if not first_start:
+                        # 檢查重啟次數限制（僅對非首次啟動生效）
+                        if restart_count >= self.config.get("max_restart_attempts", 3):
+                            self.logger.error("達到最大重啟次數，停止自動重啟", 
+                                            max_attempts=self.config["max_restart_attempts"])
+                            break
+                        
+                        # 檢查重啟間隔（僅對非首次啟動生效）
+                        if current_time - last_restart_time < self.config.get("restart_delay", 60):
+                            time.sleep(10)
+                            continue
                     
-                    # 檢查重啟間隔
-                    if current_time - last_restart_time < self.config.get("restart_delay", 60):
-                        time.sleep(10)
-                        continue
-                    
-                    self.logger.warning("交易機器人未運行，正在重啟", 
-                                      restart_count=restart_count + 1)
-                    
-                    # 重啟交易機器人
-                    if self._start_bot():
-                        restart_count += 1
-                        last_restart_time = current_time
-                        self.logger.info("交易機器人重啟成功")
+                    if first_start:
+                        self.logger.info("首次啟動交易機器人")
                     else:
-                        self.logger.error("交易機器人重啟失敗")
+                        self.logger.warning("交易機器人未運行，正在重啟", 
+                                          restart_count=restart_count + 1)
+                    
+                    # 啟動/重啟交易機器人
+                    if self._start_bot():
+                        if first_start:
+                            self.logger.info("交易機器人首次啟動成功")
+                            first_start = False
+                        else:
+                            restart_count += 1
+                            self.logger.info("交易機器人重啟成功")
+                        last_restart_time = current_time
+                    else:
+                        if first_start:
+                            self.logger.error("交易機器人首次啟動失敗")
+                            # 首次啟動失敗後，轉為重啟模式（如果 auto_restart 為 True）
+                            first_start = False
+                            restart_count = 1
+                        else:
+                            self.logger.error("交易機器人重啟失敗")
                 
                 # 健康檢查
                 self._health_check()

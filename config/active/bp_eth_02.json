@@ -25,7 +25,7 @@
     "health_check_interval": 30,
     "memory_limit_mb": 2048,
     "cpu_limit_percent": 80,
-    "auto_restart": true,
+    "auto_restart": false,
     "log_cleanup_interval": 86400,
     "log_retention_days": 2
   },
@@ -37,14 +37,14 @@
     "default_window": "5002"
   },
   "strategy_config": {
-    "grid_upper_price": 3200,
-    "grid_lower_price": 2950,
+    "grid_upper_price": 2950,
+    "grid_lower_price": 2750,
     "grid_num": 45,
     "grid_mode": "geometric",
     "grid_type": "long",
-    "max_position": 2.4,
-    "stop_loss": 300,
-    "take_profit": 600,
+    "max_position": 0.03,
+    "stop_loss": 100,
+    "take_profit": 200,
     "boundary_action": "emergency_close",
     "boundary_tolerance": 0.001,
     "enable_boundary_check": true,

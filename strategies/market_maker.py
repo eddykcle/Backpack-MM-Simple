@@ -2309,21 +2309,16 @@ class MarketMaker:
         """停止做市策略
         
         執行優雅停止流程：
-        1. 設置停止標誌位
-        2. 主動取消所有未成交訂單
-        3. 關閉 WebSocket 連接
+        1. 設置停止標誌位，讓主循環快速退出
+        2. 訂單取消由 run() 方法的 finally 塊處理
+        
+        注意：此方法可能在信號處理器中被調用，因此必須快速返回，
+        不能執行阻塞操作（如網絡請求）。
         """
-        logger.info("收到停止信號，正在停止做市策略...")
+        logger.info("收到停止信號，設置停止標誌...")
         self._stop_flag = True
         self._stop_trading = True
-        
-        # 主動取消所有未成交訂單（確保訂單被取消）
-        try:
-            logger.info("正在取消所有未成交訂單...")
-            self.cancel_existing_orders()
-            logger.info("所有訂單取消完成")
-        except Exception as e:
-            logger.error(f"取消訂單時發生錯誤: {e}")
+        logger.info("停止標誌已設置，主循環將在下次檢查時退出")
 
     def run(self, duration_seconds=3600, interval_seconds=60):
         """執行做市策略"""
@@ -2421,7 +2416,12 @@ class MarketMaker:
 
                 wait_time = interval_seconds
                 logger.info(f"等待 {wait_time} 秒後進行下一次迭代...")
-                time.sleep(wait_time)
+                # 分段 sleep，每秒檢查停止標誌，確保能快速響應停止信號
+                for _ in range(wait_time):
+                    if self._stop_flag:
+                        logger.info("檢測到停止標誌，提前結束等待")
+                        break
+                    time.sleep(1)
 
             # 結束運行時打印最終報表
             logger.info("\n=== 做市策略運行結束 ===")

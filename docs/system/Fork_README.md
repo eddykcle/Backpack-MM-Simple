@@ -63,9 +63,7 @@ pip install psutil requests
 ### 3. 啟動系統
 ```bash
 # 啟動守護進程（推薦使用虛擬環境中的Python）
-.venv/bin/python3 core/daemon_manager.py start --daemon
 
-# 運行新的config file
 .venv/bin/python3 core/daemon_manager.py start --config config/active/backpack_eth_usdc_perp_grid.json --daemon
 
 # 4. 等待幾秒確認啟動成功
@@ -75,13 +73,13 @@ sleep 5
 .venv/bin/python3 core/daemon_manager.py start --config config/active/bp_eth_02.json --daemon
 
 # 查看狀態
-.venv/bin/python3 core/daemon_manager.py status
+.venv/bin/python3 core/daemon_manager.py status 
 
 # 列出所有實例
 .venv/bin/python3 core/daemon_manager.py list
 
 # 停止守護進程
-.venv/bin/python3 core/daemon_manager.py stop 
+.venv/bin/python3 core/daemon_manager.py stop --config
 
 .venv/bin/python3 core/daemon_manager.py stop --config config/active/backpack_eth_usdc_perp_grid.json --daemon
 

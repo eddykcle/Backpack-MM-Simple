@@ -182,3 +182,31 @@ class StrategyValidator(InputValidator):
         
         # 跨字段驗證
         self.add_cross_field_rule(CommonRules.grid_range_logic())
+
+
+class CliValidator(InputValidator):
+    """CLI 輸入專用驗證器"""
+    
+    # URL 驗證正則表達式（僅允許本地和內網地址）
+    LOCAL_URL_PATTERN = re.compile(
+        r'^https?://'
+        r'(localhost|127\.0\.0\.1|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|'
+        r'172\.(1[6-9]|2[0-9]|3[0-1])\.\d{1,3}\.\d{1,3}|'
+        r'192\.168\.\d{1,3}\.\d{1,3})'
+        r'(:\d{1,5})?'
+        r'(/.*)?$',
+        re.IGNORECASE
+    )
+    
+    def __init__(self):
+        super().__init__("cli")
+        self._setup_cli_rules()
+    
+    def _setup_cli_rules(self):
+        """設置 CLI 驗證規則"""
+        # URL 驗證規則（防止 SSRF 攻擊，只允許本地和內網地址）
+        self.add_rule('base_url', ValidationRule(
+            name="local_url",
+            validator=lambda x: x is None or bool(self.LOCAL_URL_PATTERN.match(str(x))),
+            error_message="只允許訪問本地或內網地址 (localhost, 127.0.0.1, 10.x.x.x, 172.16-31.x.x, 192.168.x.x)"
+        ))

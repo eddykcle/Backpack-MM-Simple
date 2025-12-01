@@ -37,8 +37,8 @@
     "default_window": "5001"
   },
   "strategy_config": {
-    "grid_upper_price": 147,
-    "grid_lower_price": 134,
+    "grid_upper_price": 135,
+    "grid_lower_price": 121,
     "grid_num": 20,
     "grid_mode": "arithmetic",
     "grid_type": "long",

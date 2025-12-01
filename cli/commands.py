@@ -3,7 +3,7 @@ CLI命令模塊，提供命令行交互功能
 """
 import time
 import os
-from typing import Optional
+from typing import Optional, List, Dict, Any
 from datetime import datetime
 import requests
 import json
@@ -20,9 +20,11 @@ from strategies.maker_taker_hedge import MakerTakerHedgeStrategy
 from strategies.grid_strategy import GridStrategy
 from strategies.perp_grid_strategy import PerpGridStrategy
 from utils.helpers import calculate_volatility
+from utils.input_validation import CliValidator
 from database.db import Database
 from config import API_KEY, SECRET_KEY, ENABLE_DATABASE
 from core.logger import setup_logger
+from core.instance_manager import InstanceRegistry
 
 logger = setup_logger("cli")
 
@@ -929,15 +931,257 @@ def run_market_maker_command(api_key, secret_key):
                 pass
 
 
-def grid_adjust_command():
-    """透過 Web 控制端即時調整網格上下限"""
-    default_host = os.getenv('WEB_HOST', '127.0.0.1')
-    default_port = os.getenv('WEB_PORT', '5000')
-    default_base = os.getenv('WEB_API_BASE', f"http://127.0.0.1:{default_port}")
+def _get_running_instances() -> List[Dict[str, Any]]:
+    """獲取所有運行中的實例及其配置信息
+    
+    Returns:
+        包含實例信息的列表，每個實例包含 instance_id, symbol, web_port, config_file 等
+    """
+    registry = InstanceRegistry()
+    running_instances = []
+    
+    # 從 InstanceRegistry 獲取運行中的實例
+    instances = registry.list_instances(include_dead=False)
+    
+    for inst in instances:
+        instance_info = {
+            'instance_id': inst.get('instance_id', 'unknown'),
+            'symbol': inst.get('symbol', 'N/A'),
+            'web_port': inst.get('web_port'),
+            'config_file': inst.get('config_file', ''),
+            'strategy': inst.get('strategy', 'N/A'),
+            'exchange': inst.get('exchange', 'N/A'),
+            'is_alive': inst.get('is_alive', False),
+        }
+        
+        # 如果沒有 web_port，嘗試從配置文件讀取
+        if not instance_info['web_port'] and instance_info['config_file']:
+            try:
+                config_path = Path(instance_info['config_file'])
+                if config_path.exists():
+                    with open(config_path, 'r', encoding='utf-8') as f:
+                        config = json.load(f)
+                        daemon_config = config.get('daemon_config', {})
+                        instance_info['web_port'] = daemon_config.get('web_port')
+                        
+                        # 補充其他信息
+                        metadata = config.get('metadata', {})
+                        if not instance_info['symbol'] or instance_info['symbol'] == 'N/A':
+                            instance_info['symbol'] = metadata.get('symbol', 'N/A')
+                        if not instance_info['exchange'] or instance_info['exchange'] == 'N/A':
+                            instance_info['exchange'] = metadata.get('exchange', 'N/A')
+                        if not instance_info['strategy'] or instance_info['strategy'] == 'N/A':
+                            instance_info['strategy'] = metadata.get('strategy', 'N/A')
+            except Exception as e:
+                logger.debug(f"讀取配置文件失敗: {e}")
+        
+        if instance_info['web_port']:
+            running_instances.append(instance_info)
+    
+    # 如果 InstanceRegistry 沒有數據，嘗試從活躍配置文件中掃描
+    if not running_instances:
+        running_instances = _scan_active_configs_for_ports()
+    
+    return running_instances
 
-    print("\n=== 網格範圍調整 ===")
-    base_url_input = input(f"請輸入 Web 控制端地址 (默認 {default_base}): ").strip()
-    base_url = base_url_input or default_base
+
+def _scan_active_configs_for_ports() -> List[Dict[str, Any]]:
+    """掃描活躍配置文件目錄，獲取可能運行的實例端口
+    
+    Returns:
+        包含實例信息的列表
+    """
+    active_config_dir = Path("config/active")
+    instances = []
+    
+    if not active_config_dir.exists():
+        return instances
+    
+    for config_file in active_config_dir.glob("*.json"):
+        try:
+            with open(config_file, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+            
+            daemon_config = config.get('daemon_config', {})
+            metadata = config.get('metadata', {})
+            web_port = daemon_config.get('web_port')
+            
+            if web_port:
+                # 檢查端口是否有服務在運行
+                is_running = _check_port_responsive(web_port)
+                
+                instances.append({
+                    'instance_id': metadata.get('instance_id', config_file.stem),
+                    'symbol': metadata.get('symbol', 'N/A'),
+                    'web_port': web_port,
+                    'config_file': str(config_file),
+                    'strategy': metadata.get('strategy', 'N/A'),
+                    'exchange': metadata.get('exchange', 'N/A'),
+                    'is_alive': is_running,
+                })
+        except Exception as e:
+            logger.debug(f"掃描配置文件 {config_file} 失敗: {e}")
+    
+    # 只返回正在運行的實例
+    return [inst for inst in instances if inst.get('is_alive')]
+
+
+def _check_port_responsive(port: int, host: str = '127.0.0.1', timeout: float = 2.0) -> bool:
+    """檢查指定端口是否有響應的服務
+    
+    Args:
+        port: 端口號
+        host: 主機地址
+        timeout: 超時時間
+        
+    Returns:
+        端口是否有響應
+    """
+    try:
+        response = requests.get(
+            f"http://{host}:{port}/health",
+            timeout=timeout
+        )
+        return response.status_code in (200, 503)  # 503 表示服務在運行但機器人未啟動
+    except Exception:
+        return False
+
+
+def _display_running_instances(instances: List[Dict[str, Any]]) -> None:
+    """顯示運行中的實例列表
+    
+    Args:
+        instances: 實例信息列表
+    """
+    if not instances:
+        print("\n📋 未發現運行中的實例")
+        print("   提示: 請確保實例已啟動並配置了 Web 端口")
+        return
+    
+    print(f"\n📋 運行中的實例 ({len(instances)} 個):")
+    print("─" * 70)
+    print(f"{'序號':<4} {'實例ID':<15} {'交易對':<18} {'端口':<6} {'策略':<12}")
+    print("─" * 70)
+    
+    for i, inst in enumerate(instances, 1):
+        instance_id = inst.get('instance_id', 'unknown')[:14]
+        symbol = inst.get('symbol', 'N/A')[:17]
+        web_port = inst.get('web_port', 'N/A')
+        strategy = inst.get('strategy', 'N/A')[:11]
+        
+        print(f"{i:<4} {instance_id:<15} {symbol:<18} {web_port:<6} {strategy:<12}")
+    
+    print("─" * 70)
+
+
+def _select_instance(instances: List[Dict[str, Any]]) -> Optional[str]:
+    """讓用戶選擇要操作的實例
+    
+    Args:
+        instances: 實例信息列表
+        
+    Returns:
+        選中實例的 Web URL，如果取消則返回 None
+    """
+    if not instances:
+        return None
+    
+    # 如果只有一個實例，自動選擇
+    if len(instances) == 1:
+        inst = instances[0]
+        web_port = inst.get('web_port')
+        instance_id = inst.get('instance_id', 'unknown')
+        symbol = inst.get('symbol', 'N/A')
+        
+        print(f"\n🎯 自動選擇唯一運行的實例: {instance_id} ({symbol})")
+        return f"http://127.0.0.1:{web_port}"
+    
+    # 多個實例，讓用戶選擇
+    print("\n請選擇要調整的實例:")
+    print("  輸入序號 (1, 2, ...) 選擇對應實例")
+    print("  輸入實例ID (如 bp_sol_01) 直接選擇")
+    print("  輸入完整地址 (如 http://127.0.0.1:5001) 直接使用")
+    print("  按 Enter 取消操作")
+    
+    user_input = input("\n請選擇: ").strip()
+    
+    if not user_input:
+        return None
+    
+    # 嘗試解析為序號
+    try:
+        index = int(user_input)
+        if 1 <= index <= len(instances):
+            inst = instances[index - 1]
+            web_port = inst.get('web_port')
+            return f"http://127.0.0.1:{web_port}"
+        else:
+            print(f"❌ 無效的序號，請輸入 1-{len(instances)} 之間的數字")
+            return None
+    except ValueError:
+        pass
+    
+    # 嘗試匹配實例ID
+    for inst in instances:
+        if inst.get('instance_id', '').lower() == user_input.lower():
+            web_port = inst.get('web_port')
+            return f"http://127.0.0.1:{web_port}"
+    
+    # 檢查是否為完整URL
+    if user_input.startswith('http://') or user_input.startswith('https://'):
+        return user_input.rstrip('/')
+    
+    # 嘗試作為端口號處理
+    try:
+        port = int(user_input)
+        if 1024 <= port <= 65535:
+            return f"http://127.0.0.1:{port}"
+    except ValueError:
+        pass
+    
+    print(f"❌ 無法識別的輸入: {user_input}")
+    print("   請輸入序號、實例ID、端口號或完整URL")
+    return None
+
+
+def grid_adjust_command():
+    """透過 Web 控制端即時調整網格上下限
+    
+    改進功能:
+    1. 自動發現運行中的實例
+    2. 支持通過實例ID選擇
+    3. 單實例時自動選擇
+    """
+    print("\n" + "=" * 50)
+    print("        🔧 網格範圍調整工具")
+    print("=" * 50)
+    
+    # 獲取運行中的實例
+    instances = _get_running_instances()
+    
+    # 顯示實例列表
+    _display_running_instances(instances)
+    
+    # 選擇實例
+    base_url = _select_instance(instances)
+    
+    if base_url is None:
+        # 如果沒有運行的實例或用戶取消，提供手動輸入選項
+        if not instances:
+            print("\n💡 您也可以手動輸入 Web 控制端地址")
+        
+        default_host = os.getenv('WEB_HOST', '127.0.0.1')
+        default_port = os.getenv('WEB_PORT', '5000')
+        default_base = os.getenv('WEB_API_BASE', f"http://127.0.0.1:{default_port}")
+        
+        base_url_input = input(f"\n請輸入 Web 控制端地址 (默認 {default_base}, 按 Enter 取消): ").strip()
+        
+        if not base_url_input:
+            print("⚠️  操作已取消")
+            return
+        
+        base_url = base_url_input
+    
     base_url = base_url.rstrip('/')
 
     # URL 驗證
@@ -949,7 +1193,7 @@ def grid_adjust_command():
         for field, field_errors in errors.items():
             error_messages.extend(field_errors)
         
-        print(f"❌ 錯誤: {'; '.join(error_messages)}")
+        print(f"\n❌ 錯誤: {'; '.join(error_messages)}")
         print("\n📋 安全提示:")
         print("  只允許訪問本地或內網地址，例如:")
         print("    - http://127.0.0.1:5000")
@@ -959,6 +1203,27 @@ def grid_adjust_command():
         print("  不允許訪問外部網址，防止 SSRF 攻擊")
         return
 
+    print(f"\n📍 目標地址: {base_url}")
+    
+    # 嘗試獲取當前網格狀態
+    try:
+        status_response = requests.get(f"{base_url}/api/status", timeout=5)
+        if status_response.ok:
+            status = status_response.json()
+            stats = status.get('stats', {})
+            current_lower = stats.get('grid_lower_price')
+            current_upper = stats.get('grid_upper_price')
+            current_price = stats.get('current_price')
+            
+            if current_lower and current_upper:
+                print(f"\n📊 當前網格狀態:")
+                print(f"   網格範圍: {current_lower} ~ {current_upper}")
+                if current_price:
+                    print(f"   當前價格: {current_price}")
+    except Exception:
+        pass  # 獲取狀態失敗不影響主流程
+
+    print("\n" + "-" * 50)
     lower_input = input("新的網格下限價格 (留空沿用當前設定): ").strip()
     upper_input = input("新的網格上限價格 (留空沿用當前設定): ").strip()
 
@@ -978,7 +1243,7 @@ def grid_adjust_command():
         return
 
     endpoint = f"{base_url}/api/grid/adjust"
-    print(f"🔄 正在向 {endpoint} 發送調整請求...")
+    print(f"\n🔄 正在向 {endpoint} 發送調整請求...")
 
     try:
         # 添加超時和驗證
@@ -1007,10 +1272,11 @@ def grid_adjust_command():
     if response.ok and result.get('success'):
         lower = result.get('grid_lower_price')
         upper = result.get('grid_upper_price')
-        print(f"✅ 網格範圍調整成功，新區間: {lower} ~ {upper}")
+        print(f"\n✅ 網格範圍調整成功!")
+        print(f"   新區間: {lower} ~ {upper}")
     else:
         message = result.get('message') if isinstance(result, dict) else response.text
-        print(f"❌ 網格調整失敗: {message}")
+        print(f"\n❌ 網格調整失敗: {message}")
 
 def rebalance_settings_command():
     """重平設置管理命令"""
