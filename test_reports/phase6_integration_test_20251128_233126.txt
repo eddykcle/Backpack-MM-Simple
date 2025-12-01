@@ -1,0 +1,53 @@
+PHASE 6 集成測試報告
+================================================================================
+測試開始時間: 2025-11-28 23:30:43
+測試結束時間: 2025-11-28 23:31:26
+總測試項: 32
+通過: 30
+失敗: 2
+成功率: 93.8%
+
+詳細結果:
+--------------------------------------------------------------------------------
+✅ PASS 清理實例
+   清理了 1 個死亡實例
+✅ PASS bp_sol_01 metadata.instance_id
+✅ PASS bp_sol_01 daemon_config.log_dir
+✅ PASS bp_sol_01 daemon_config.db_path
+✅ PASS bp_sol_01 daemon_config.web_port
+✅ PASS bp_eth_02 metadata.instance_id
+✅ PASS bp_eth_02 daemon_config.log_dir
+✅ PASS bp_eth_02 daemon_config.db_path
+✅ PASS bp_eth_02 daemon_config.web_port
+✅ PASS 實例隔離 instance_id 不同
+✅ PASS 實例隔離 log_dir 不同
+✅ PASS 實例隔離 web_port 不同
+✅ PASS 實例隔離 db_path 不同
+✅ PASS CLI list 命令
+✅ PASS CLI list 輸出格式
+✅ PASS CLI list 命令
+✅ PASS CLI list --all 命令
+✅ PASS CLI stats 命令
+✅ PASS CLI validate 命令
+✅ PASS 端口 5001 可用性
+   端口未被佔用
+✅ PASS 端口 5002 可用性
+   端口未被佔用
+✅ PASS 數據庫隔離 db1 文件創建
+✅ PASS 數據庫隔離 db2 文件創建
+✅ PASS 數據庫隔離 db1 路徑正確
+✅ PASS 數據庫隔離 db2 路徑正確
+✅ PASS 日誌目錄 logs/bp_sol_01
+   目錄已存在
+✅ PASS 日誌目錄 logs/bp_eth_02
+   目錄已存在
+❌ FAIL 並發啟動
+   超時
+✅ PASS 端口 5001 健康檢查
+   status=200
+❌ FAIL 端口 5001 網格調整端點
+   status=200
+✅ PASS 端口 5002 API
+   端口未佔用（正常）
+✅ PASS 清理實例
+   清理了 0 個死亡實例

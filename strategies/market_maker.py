@@ -40,6 +40,7 @@ class MarketMaker:
         secret_key,
         symbol,
         db_instance=None,
+        db_path=None,
         base_spread_percentage=0.2,
         order_quantity=None,
         max_orders=3,
@@ -83,7 +84,13 @@ class MarketMaker:
         self.db_enabled = bool(enable_database)
         self.db = None
         if self.db_enabled:
-            self.db = db_instance if db_instance else Database()
+            if db_instance:
+                self.db = db_instance
+            elif db_path:
+                self.db = Database(db_path=db_path)
+                logger.info(f"使用數據庫路徑: {db_path}")
+            else:
+                self.db = Database()
         elif db_instance and hasattr(db_instance, 'close'):
             try:
                 db_instance.close()
@@ -2299,9 +2306,19 @@ class MarketMaker:
         return False
 
     def stop(self):
-        """停止做市策略"""
-        logger.info("收到停止信號，正在停止做市策略...")
+        """停止做市策略
+        
+        執行優雅停止流程：
+        1. 設置停止標誌位，讓主循環快速退出
+        2. 訂單取消由 run() 方法的 finally 塊處理
+        
+        注意：此方法可能在信號處理器中被調用，因此必須快速返回，
+        不能執行阻塞操作（如網絡請求）。
+        """
+        logger.info("收到停止信號，設置停止標誌...")
         self._stop_flag = True
+        self._stop_trading = True
+        logger.info("停止標誌已設置，主循環將在下次檢查時退出")
 
     def run(self, duration_seconds=3600, interval_seconds=60):
         """執行做市策略"""
@@ -2399,7 +2416,12 @@ class MarketMaker:
 
                 wait_time = interval_seconds
                 logger.info(f"等待 {wait_time} 秒後進行下一次迭代...")
-                time.sleep(wait_time)
+                # 分段 sleep，每秒檢查停止標誌，確保能快速響應停止信號
+                for _ in range(wait_time):
+                    if self._stop_flag:
+                        logger.info("檢測到停止標誌，提前結束等待")
+                        break
+                    time.sleep(1)
 
             # 結束運行時打印最終報表
             logger.info("\n=== 做市策略運行結束 ===")

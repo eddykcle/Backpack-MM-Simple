@@ -587,7 +587,6 @@ def _cleanup_log_directory(log_dir: str, days_to_keep: int, logger):
             
             if dir_datetime < cutoff_date:
                 # 整個目錄都超過保留期限，刪除整個目錄
-                import shutil
                 shutil.rmtree(date_dir)
                 logger.info("刪除舊日誌目錄", directory=str(date_dir))
                 cleaned_count += 1

@@ -17,7 +17,6 @@ grid_params = ["grid-upper", "grid-lower", ...]  # 转换后: grid_upper, grid_l
 症状: 日志显示价格超出网格边界后执行了 emergency_close，但策略继续循环
 
 根因: perp_grid_strategy.py 第1969行设置的是 self._stop_trading = True，但主循环 (market_maker.py 第2348行) 只检查 self._stop_flag:
-
 # market_maker.py:2348
 while time.time() - start_time < duration_seconds and not self._stop_flag:
 问题 3: 多策略日志文件同时记录 (中等)

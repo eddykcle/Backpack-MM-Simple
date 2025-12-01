@@ -15,39 +15,58 @@ from datetime import datetime
 try:
     # 作為模塊導入時使用相對導入
     from .log_manager import StructuredLogger, ProcessManager, get_logger, cleanup_old_logs, _loggers
+    from .instance_manager import InstanceRegistry
 except ImportError:
     # 直接運行時使用絕對導入
     sys.path.insert(0, str(Path(__file__).parent.parent))
     from core.log_manager import StructuredLogger, ProcessManager, get_logger, cleanup_old_logs, _loggers
+    from core.instance_manager import InstanceRegistry
 
 class TradingBotDaemon:
     """交易機器人守護進程管理器"""
-    
-    def __init__(self, config_file: str = "config/daemon_config.json"):
+
+    def __init__(self, config_file: str = "config/daemon_config.json", instance_id: Optional[str] = None):
         self.config_file = Path(config_file)
         # 檢查是否為新的多配置格式
         self.is_multi_config = self._is_multi_config_format(config_file)
-        self.log_dir = Path("logs")
-        self.log_dir.mkdir(exist_ok=True)
-        
-        # 使用高級日誌系統
-        self.logger = get_logger("trading_bot_daemon")
+
+        # 確定實例 ID（優先級：參數 > 配置 > 文件名）
+        if instance_id:
+            self.instance_id = instance_id
+        elif self.is_multi_config:
+            # 從配置文件讀取 instance_id
+            config_data = self._load_config_for_instance_id()
+            self.instance_id = config_data.get('metadata', {}).get('instance_id') or self.config_file.stem
+        else:
+            # 傳統配置，使用文件名作為 instance_id
+            self.instance_id = self.config_file.stem
+
+        # 實例專用日誌目錄
+        self.log_dir = Path(f"logs/{self.instance_id}")
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+
+        # 使用高級日誌系統（傳遞實例專用日誌目錄）
+        self.logger = get_logger("trading_bot_daemon", log_dir=str(self.log_dir))
         self.process_manager = ProcessManager(str(self.log_dir))
-        
+        self.registry = InstanceRegistry()
+
         # 配置
         self.config = self.load_config()
-        
+
         # 信號處理
         self.running = True
         signal.signal(signal.SIGTERM, self._signal_handler)
         signal.signal(signal.SIGINT, self._signal_handler)
-        
-        # 子進程管理（防止資源泄漏）
+
+        # 子進程管理（防止資源泄漏）- 使用實例專用 PID 文件
         self._bot_process: Optional[subprocess.Popen] = None
         self._bot_pid_file = self.log_dir / "bot.pid"
-        
+
         # 註冊退出時的清理函數
         atexit.register(self._cleanup_bot_process)
+        
+        # 注意：不在 __init__ 中註冊實例，只在 start() 時才註冊
+        # 避免 status/stop 等查詢命令也產生註冊記錄
     
     def _is_multi_config_format(self, config_file: str) -> bool:
         """檢查是否為新的多配置格式"""
@@ -58,6 +77,15 @@ class TradingBotDaemon:
                 return all(key in config_data for key in ["metadata", "daemon_config", "exchange_config", "strategy_config"])
         except:
             return False
+
+    def _load_config_for_instance_id(self) -> Dict[str, Any]:
+        """提前加載配置以獲取 instance_id（不展開環境變量）"""
+        try:
+            with open(self.config_file, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            # 如果加載失敗，返回空字典
+            return {}
     
     def load_config(self) -> Dict[str, Any]:
         """載入配置文件"""
@@ -139,6 +167,8 @@ class TradingBotDaemon:
                 "script_path": daemon_config.get("script_path", "run.py"),
                 "working_dir": daemon_config.get("working_dir", str(Path.cwd())),
                 "log_dir": daemon_config.get("log_dir", str(self.log_dir)),
+                "db_path": daemon_config.get("db_path", "database/trade.db"),
+                "web_port": daemon_config.get("web_port", 5000),
                 "max_restart_attempts": daemon_config.get("max_restart_attempts", 3),
                 "restart_delay": daemon_config.get("restart_delay", 60),
                 "health_check_interval": daemon_config.get("health_check_interval", 30),
@@ -251,11 +281,48 @@ class TradingBotDaemon:
             self.logger.info("配置已保存", config_file=str(self.config_file))
         except Exception as e:
             self.logger.error("保存配置文件失敗", error=str(e))
-    
+
+    def _register_instance(self):
+        """使用 InstanceRegistry 註冊實例"""
+        try:
+            self.registry.register(self.instance_id, {
+                "config_file": str(self.config_file),
+                "pid": os.getpid(),
+                "log_dir": str(self.log_dir),
+                "web_port": self.config.get("web_port"),
+                "started_at": datetime.now().isoformat(),
+                "status": "starting"
+            })
+            self.logger.info("實例已註冊", instance_id=self.instance_id, pid=os.getpid())
+        except Exception as e:
+            self.logger.warning("註冊實例失敗", error=str(e))
+
+    def _unregister_instance(self):
+        """使用 InstanceRegistry 註銷實例"""
+        try:
+            if self.registry.unregister(self.instance_id):
+                self.logger.info("實例已註銷", instance_id=self.instance_id)
+        except Exception as e:
+            self.logger.warning("註銷實例失敗", error=str(e))
+
     def _signal_handler(self, signum, frame):
-        """信號處理函數"""
+        """信號處理函數
+        
+        收到 SIGTERM/SIGINT 時執行優雅停止：
+        1. 設置停止標誌
+        2. 先停止 bot 進程（讓它有機會取消訂單）
+        3. 然後退出主循環
+        """
         self.logger.info("收到停止信號", signal=signum)
         self.running = False
+        
+        # 優雅停止 bot 進程（讓它有機會取消訂單）
+        self.logger.info("正在優雅停止 bot 進程...")
+        try:
+            self._stop_bot_process()
+            self.logger.info("Bot 進程已停止")
+        except Exception as e:
+            self.logger.warning("停止 bot 進程時發生錯誤", error=str(e))
     
     def start(self, daemonize: bool = True) -> bool:
         """啟動守護進程"""
@@ -263,8 +330,8 @@ class TradingBotDaemon:
             # 清除日誌記錄器緩存，確保使用新的配置
             _loggers.clear()
             
-            # 重新創建日誌記錄器
-            self.logger = get_logger("trading_bot_daemon")
+            # 重新創建日誌記錄器（使用實例專用的日誌目錄）
+            self.logger = get_logger("trading_bot_daemon", log_dir=str(self.log_dir))
             self.process_manager = ProcessManager(str(self.log_dir))
             
             # 檢查是否已經在運行
@@ -286,6 +353,17 @@ class TradingBotDaemon:
                 # 子進程繼續執行
                 os.setsid()  # 創建新會話
                 os.umask(0)  # 清除文件模式創建掩碼
+                
+                # 重要：fork 後子進程必須重新初始化日誌器和進程管理器
+                # 因為父進程的文件描述符和日誌處理器可能已關閉或有衝突
+                # 這是多實例能夠同時運行的關鍵
+                _loggers.clear()
+                self.logger = get_logger("trading_bot_daemon", log_dir=str(self.log_dir))
+                self.process_manager = ProcessManager(str(self.log_dir))
+            
+            # 此時已在最終守護進程中（daemonize=True 時為子進程，否則為原進程）
+            # 使用正確的 PID 註冊實例到全局註冊表
+            self._register_instance()
             
             # 寫入PID文件
             self.process_manager.write_pid_file()
@@ -302,38 +380,56 @@ class TradingBotDaemon:
             return False
     
     def stop(self) -> bool:
-        """停止守護進程"""
+        """停止本實例的守護進程和 bot
+        
+        只會停止自己實例的進程，不會影響其他實例。
+        
+        優雅停止流程：
+        1. 先發送 SIGTERM 給 bot 進程，讓它有時間取消訂單
+        2. 等待足夠時間讓 bot 完成清理工作
+        3. 再停止守護進程
+        """
         try:
-            # 先清理子進程引用
-            self._cleanup_bot_process()
+            # 獲取配置的超時時間
+            bot_cleanup_timeout = self.config.get("bot_stop_timeout", 25)
             
-            # 停止所有由守護進程啟動的 run.py 子進程
-            self.logger.info("正在停止所有交易機器人進程...")
-            self._stop_old_bot_processes()
+            # 1. 先發送 SIGTERM 給 bot 進程
+            self.logger.info("正在停止本實例的交易機器人進程...", instance_id=self.instance_id)
+            self.logger.info(f"等待 bot 進程完成清理（取消訂單等），超時時間: {bot_cleanup_timeout} 秒")
             
-            # 檢查守護進程是否在運行
+            # 停止 bot 進程（_stop_bot_process 內部會等待進程退出）
+            bot_stopped = self._stop_bot_process()
+            
+            if bot_stopped:
+                self.logger.info("Bot 進程已停止，訂單應已取消")
+            else:
+                self.logger.warning("未找到運行中的 bot 進程")
+            
+            # 2. 額外等待一小段時間確保清理完成
+            time.sleep(2)
+
+            # 3. 檢查守護進程是否在運行
             if not self.process_manager.is_running():
                 self.logger.warning("守護進程未在運行")
-                return False
-            
+                # 清理註冊（即使進程未運行，也應該清理註冊表）
+                self._unregister_instance()
+                return True  # bot 已停止，視為成功
+
             pid = self.process_manager.get_pid()
             self.logger.info("正在停止守護進程", pid=pid)
-            
+
             # 停止守護進程本身
             success = self.process_manager.stop_process()
-            
+
             if success:
                 self.logger.info("守護進程已停止")
-                # 再次確認沒有遺留的 run.py 進程
-                time.sleep(1)
-                remaining = self._stop_old_bot_processes()
-                if remaining > 0:
-                    self.logger.warning("仍有 %d 個 run.py 進程在運行", remaining)
+                # 清理註冊
+                self._unregister_instance()
             else:
                 self.logger.error("停止守護進程失敗")
-            
+
             return success
-            
+
         except Exception as e:
             self.logger.error("停止守護進程失敗", error=str(e), exc_info=True)
             return False
@@ -398,10 +494,15 @@ class TradingBotDaemon:
         return status
     
     def _main_loop(self):
-        """主循環，監控和重啟交易機器人"""
+        """主循環，監控和重啟交易機器人
+        
+        首次啟動時會無條件啟動 bot，之後根據 auto_restart 設置決定是否自動重啟。
+        - auto_restart: 控制 bot 崩潰後是否自動重啟（不影響首次啟動）
+        """
         restart_count = 0
         last_restart_time = 0
         last_log_cleanup_time = time.time()  # 記錄上次日誌清理時間
+        first_start = True  # 標記是否為首次啟動
         
         while self.running:
             try:
@@ -409,36 +510,52 @@ class TradingBotDaemon:
                 bot_running = self._is_bot_running()
                 
                 if bot_running:
-                    # 如果機器人在運行，重置重啟計數器
+                    # 如果機器人在運行，重置重啟計數器和首次啟動標記
+                    first_start = False
                     if restart_count > 0:
                         self.logger.info("交易機器人已恢復運行，重置重啟計數器", 
                                        previous_restart_count=restart_count)
                         restart_count = 0
-                elif self.config.get("auto_restart", True):
-                    # 機器人未運行，嘗試重啟
+                elif first_start or self.config.get("auto_restart", True):
+                    # 首次啟動時無條件啟動 bot，或者 auto_restart 為 True 時自動重啟
                     current_time = time.time()
                     
-                    # 檢查重啟次數限制
-                    if restart_count >= self.config.get("max_restart_attempts", 3):
-                        self.logger.error("達到最大重啟次數，停止自動重啟", 
-                                        max_attempts=self.config["max_restart_attempts"])
-                        break
+                    # 首次啟動不受重啟次數限制
+                    if not first_start:
+                        # 檢查重啟次數限制（僅對非首次啟動生效）
+                        if restart_count >= self.config.get("max_restart_attempts", 3):
+                            self.logger.error("達到最大重啟次數，停止自動重啟", 
+                                            max_attempts=self.config["max_restart_attempts"])
+                            break
+                        
+                        # 檢查重啟間隔（僅對非首次啟動生效）
+                        if current_time - last_restart_time < self.config.get("restart_delay", 60):
+                            time.sleep(10)
+                            continue
                     
-                    # 檢查重啟間隔
-                    if current_time - last_restart_time < self.config.get("restart_delay", 60):
-                        time.sleep(10)
-                        continue
-                    
-                    self.logger.warning("交易機器人未運行，正在重啟", 
-                                      restart_count=restart_count + 1)
-                    
-                    # 重啟交易機器人
-                    if self._start_bot():
-                        restart_count += 1
-                        last_restart_time = current_time
-                        self.logger.info("交易機器人重啟成功")
+                    if first_start:
+                        self.logger.info("首次啟動交易機器人")
                     else:
-                        self.logger.error("交易機器人重啟失敗")
+                        self.logger.warning("交易機器人未運行，正在重啟", 
+                                          restart_count=restart_count + 1)
+                    
+                    # 啟動/重啟交易機器人
+                    if self._start_bot():
+                        if first_start:
+                            self.logger.info("交易機器人首次啟動成功")
+                            first_start = False
+                        else:
+                            restart_count += 1
+                            self.logger.info("交易機器人重啟成功")
+                        last_restart_time = current_time
+                    else:
+                        if first_start:
+                            self.logger.error("交易機器人首次啟動失敗")
+                            # 首次啟動失敗後，轉為重啟模式（如果 auto_restart 為 True）
+                            first_start = False
+                            restart_count = 1
+                        else:
+                            self.logger.error("交易機器人重啟失敗")
                 
                 # 健康檢查
                 self._health_check()
@@ -460,7 +577,10 @@ class TradingBotDaemon:
         self.logger.info("主循環已停止")
     
     def _is_bot_running(self) -> bool:
-        """檢查交易機器人是否在運行"""
+        """檢查本實例的交易機器人是否在運行
+        
+        只檢查自己實例的 bot，不會誤判其他實例的狀態。
+        """
         # 優先檢查進程是否存在（更可靠）
         if self._check_bot_process():
             return True
@@ -468,7 +588,9 @@ class TradingBotDaemon:
         # 如果進程不存在，再檢查健康檢查端點（可能Web服務器還沒啟動）
         try:
             import requests
-            health_url = "http://localhost:5000/health"
+            # 使用配置的端口，而不是硬編碼 5000
+            web_port = self.config.get("web_port", 5000)
+            health_url = f"http://localhost:{web_port}/health"
             response = requests.get(health_url, timeout=5)
             # 即使返回503，只要進程存在就認為在運行
             return response.status_code in [200, 503]
@@ -477,82 +599,107 @@ class TradingBotDaemon:
             return False
     
     def _check_bot_process(self) -> bool:
-        """通過進程檢查交易機器人是否在運行"""
+        """通過 bot.pid 檢查本實例的交易機器人是否在運行
+        
+        只檢查自己實例的 bot 進程（通過 bot.pid 文件追蹤），
+        不會影響其他實例的進程。
+        """
         try:
-            # 查找運行run.py的進程
-            for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
-                try:
-                    cmdline = proc.info.get('cmdline', [])
-                    if cmdline and any('run.py' in arg for arg in cmdline):
-                        return True
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    continue
+            # 只檢查自己的 bot.pid 文件
+            if not self._bot_pid_file.exists():
+                return False
+            
+            with open(self._bot_pid_file, 'r') as f:
+                pid = int(f.read().strip())
+            
+            # 檢查該 PID 是否存在且正在運行
+            if psutil.pid_exists(pid):
+                proc = psutil.Process(pid)
+                return proc.is_running() and proc.status() != psutil.STATUS_ZOMBIE
             
             return False
             
+        except (ValueError, FileNotFoundError):
+            # PID 文件內容無效或不存在
+            return False
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            # 進程不存在或無權限訪問
+            return False
         except Exception as e:
             self.logger.error("檢查進程失敗", error=str(e))
             return False
     
-    def _stop_old_bot_processes(self) -> int:
-        """停止所有舊的run.py進程
+    def _stop_bot_process(self) -> int:
+        """只停止本實例的 bot 進程（通過 bot.pid 追蹤）
+        
+        只會停止自己實例啟動的 bot 進程，不會影響其他實例。
         
         Returns:
-            int: 停止的進程數量
+            int: 停止的進程數量（0 或 1）
         """
         try:
-            stopped_count = 0
-            current_pid = os.getpid()
+            # 檢查 bot.pid 文件是否存在
+            if not self._bot_pid_file.exists():
+                self.logger.debug("沒有 bot.pid 文件，無需停止進程")
+                return 0
+            
+            # 讀取 PID
+            try:
+                with open(self._bot_pid_file, 'r') as f:
+                    pid = int(f.read().strip())
+            except (ValueError, FileNotFoundError):
+                self.logger.debug("bot.pid 文件內容無效或不存在")
+                self._remove_bot_pid_file()
+                return 0
+            
+            # 檢查進程是否存在
+            if not psutil.pid_exists(pid):
+                self.logger.debug("bot.pid 中的進程不存在", pid=pid)
+                self._remove_bot_pid_file()
+                return 0
+            
+            # 獲取進程對象
+            try:
+                proc = psutil.Process(pid)
+            except psutil.NoSuchProcess:
+                self.logger.debug("進程已不存在", pid=pid)
+                self._remove_bot_pid_file()
+                return 0
             
             stop_timeout = max(1, int(self.config.get("bot_stop_timeout", 20)))
             kill_timeout = max(1, int(self.config.get("bot_kill_timeout", 5)))
             
-            for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
-                try:
-                    cmdline = proc.info.get('cmdline', [])
-                    if cmdline and any('run.py' in arg for arg in cmdline):
-                        # 跳過當前進程（如果是從daemon內部調用）
-                        if proc.pid == current_pid:
-                            continue
-                        
-                        self.logger.info("發現 run.py 進程，正在停止", pid=proc.pid)
-                        
-                        # 優雅停止：先發送 SIGTERM
-                        try:
-                            proc.terminate()
-                            if self._wait_process_exit(proc, stop_timeout):
-                                self.logger.info("進程已優雅停止", pid=proc.pid)
-                            else:
-                                self.logger.warning(
-                                    f"進程未在 {stop_timeout} 秒內終止，強制殺掉",
-                                    pid=proc.pid
-                                )
-                                proc.kill()
-                                if not self._wait_process_exit(proc, kill_timeout):
-                                    self.logger.error(
-                                        f"強制殺掉後 {kill_timeout} 秒內仍未退出",
-                                        pid=proc.pid
-                                    )
-                        except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
-                            # 進程可能已經停止
-                            self.logger.debug("進程已不存在或無權限", pid=proc.pid, error=str(e))
-                        
-                        stopped_count += 1
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    # 進程在檢查時已經消失，繼續檢查下一個
-                    continue
+            self.logger.info("正在停止本實例的 bot 進程", pid=pid, instance_id=self.instance_id)
             
-            if stopped_count > 0:
-                self.logger.info(f"已停止 {stopped_count} 個 run.py 進程")
-                # 等待一下讓進程完全停止
-                time.sleep(1)
-            else:
-                self.logger.debug("沒有發現需要停止的 run.py 進程")
+            # 優雅停止：先發送 SIGTERM
+            try:
+                proc.terminate()
+                if self._wait_process_exit(proc, stop_timeout):
+                    self.logger.info("進程已優雅停止", pid=pid)
+                else:
+                    self.logger.warning(
+                        f"進程未在 {stop_timeout} 秒內終止，強制殺掉",
+                        pid=pid
+                    )
+                    proc.kill()
+                    if not self._wait_process_exit(proc, kill_timeout):
+                        self.logger.error(
+                            f"強制殺掉後 {kill_timeout} 秒內仍未退出",
+                            pid=pid
+                        )
+            except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
+                # 進程可能已經停止
+                self.logger.debug("進程已不存在或無權限", pid=pid, error=str(e))
             
-            return stopped_count
+            # 清理 PID 文件
+            self._remove_bot_pid_file()
+            
+            # 等待一下讓進程完全停止
+            time.sleep(1)
+            return 1
             
         except Exception as e:
-            self.logger.error("停止舊進程時出錯", error=str(e))
+            self.logger.error("停止 bot 進程時出錯", error=str(e))
             return 0
 
     def _wait_process_exit(self, proc: psutil.Process, timeout: int) -> bool:
@@ -566,10 +713,10 @@ class TradingBotDaemon:
             return False
     
     def _start_bot(self) -> bool:
-        """啟動交易機器人"""
+        """啟動本實例的交易機器人"""
         try:
-            # 先停止所有舊的run.py進程（防止多個進程同時運行）
-            self._stop_old_bot_processes()
+            # 先停止本實例之前的 bot 進程（防止重複運行）
+            self._stop_bot_process()
             
             # 清理之前的進程引用
             if self._bot_process is not None:
@@ -603,7 +750,17 @@ class TradingBotDaemon:
             # 設置環境變量
             env = os.environ.copy()
             env.update(self.config.get("environment", {}))
-            
+
+            # 添加 Web 端口環境變量
+            if "web_port" in self.config:
+                env['WEB_PORT'] = str(self.config['web_port'])
+                self.logger.info("設置 Web 端口環境變量", web_port=self.config['web_port'])
+
+            # 添加數據庫路徑環境變量
+            if "db_path" in self.config:
+                env['DB_PATH'] = str(self.config['db_path'])
+                self.logger.info("設置數據庫路徑環境變量", db_path=self.config['db_path'])
+
             # 準備輸出重定向文件（避免使用PIPE導致阻塞）
             # 子進程的stdout/stderr重定向到日誌文件，避免SSH斷開時管道阻塞
             # 使用基於時間的目錄結構
@@ -771,35 +928,88 @@ class TradingBotDaemon:
         except Exception as e:
             self.logger.error("清理舊日誌文件失敗", error=str(e))
 
+def list_instances():
+    """列出所有運行中的實例"""
+    try:
+        registry_file = Path("logs/instances.json")
+        if not registry_file.exists():
+            print("沒有運行中的實例")
+            return
+
+        with open(registry_file, 'r') as f:
+            registry = json.load(f)
+
+        if not registry:
+            print("沒有運行中的實例")
+            return
+
+        print(f"\n{'實例ID':<20} {'PID':<10} {'Web端口':<10} {'配置文件':<50} {'啟動時間':<25}")
+        print("-" * 115)
+        for instance_id, info in registry.items():
+            # 檢查進程是否還在運行
+            status = "🟢"
+            pid = info.get('pid')
+            try:
+                if pid and psutil.pid_exists(pid):
+                    proc = psutil.Process(pid)
+                    if not proc.is_running():
+                        status = "🔴"
+                else:
+                    status = "🔴"
+            except:
+                status = "🔴"
+
+            # 安全獲取各個字段，處理 None 值
+            pid_str = str(pid) if pid is not None else 'N/A'
+            web_port = info.get('web_port')
+            web_port_str = str(web_port) if web_port is not None else 'N/A'
+            config_file = info.get('config_file') or 'N/A'
+            started_at = info.get('started_at') or 'N/A'
+
+            print(f"{status} {instance_id:<18} {pid_str:<10} {web_port_str:<10} "
+                  f"{config_file:<50} {started_at:<25}")
+
+        print()
+
+    except Exception as e:
+        print(f"錯誤: 列出實例失敗 - {e}")
+
+
 def main():
     """主函數"""
     parser = argparse.ArgumentParser(description='交易機器人守護進程管理器')
-    parser.add_argument('action', choices=['start', 'stop', 'restart', 'status'], 
-                       help='操作: start(啟動), stop(停止), restart(重啟), status(狀態)')
-    parser.add_argument('--daemon', '-d', action='store_true', 
+    parser.add_argument('action', choices=['start', 'stop', 'restart', 'status', 'list'],
+                       help='操作: start(啟動), stop(停止), restart(重啟), status(狀態), list(列表)')
+    parser.add_argument('--daemon', '-d', action='store_true',
                        help='以守護進程方式運行')
     parser.add_argument('--config', '-c', default='config/daemon_config.json',
                        help='配置文件路徑')
+    parser.add_argument('--instance-id', help='實例 ID（可選，默認從配置文件讀取）')
     parser.add_argument('--log-dir', default='logs',
                        help='日誌目錄')
-    
+
     args = parser.parse_args()
-    
-    # 創建守護進程管理器
-    daemon = TradingBotDaemon(args.config)
-    
+
+    # list 命令不需要創建守護進程實例
+    if args.action == 'list':
+        list_instances()
+        sys.exit(0)
+
+    # 創建守護進程管理器（傳遞 instance_id）
+    daemon = TradingBotDaemon(args.config, instance_id=args.instance_id)
+
     if args.action == 'start':
         success = daemon.start(daemonize=args.daemon)
         sys.exit(0 if success else 1)
-    
+
     elif args.action == 'stop':
         success = daemon.stop()
         sys.exit(0 if success else 1)
-    
+
     elif args.action == 'restart':
         success = daemon.restart()
         sys.exit(0 if success else 1)
-    
+
     elif args.action == 'status':
         status = daemon.status()
         print(json.dumps(status, indent=2, ensure_ascii=False))
