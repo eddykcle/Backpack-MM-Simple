@@ -770,7 +770,7 @@ class ConfigManager:
         if self.save_config(output_path, config_data):
             return str(output_path)
         else:
-            raise Exception(f"保存配置文件失敗: {output_path}")
+            raise ConfigSaveError(f"保存配置文件失敗", config_path=str(output_path))
     
     def validate_config_file(self, config_path: Union[str, Path]) -> ValidationResult:
         """驗證配置文件
