@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 from datetime import datetime
+from copy import deepcopy
 
 from core.config_manager import ConfigManager, ConfigInfo, ValidationResult
 from core.exceptions import (
@@ -108,14 +109,14 @@ class TestConfigManager(unittest.TestCase):
         self.assertEqual(len(result.errors), 0)
         
         # 無效配置 - 缺少必需字段
-        invalid_config = self.test_config.copy()
+        invalid_config = deepcopy(self.test_config)
         del invalid_config["metadata"]["exchange"]
         result = self.config_manager.validate_config(invalid_config)
         self.assertFalse(result.is_valid)
         self.assertGreater(len(result.errors), 0)
         
         # 網格策略驗證 - 上限價格低於下限價格
-        invalid_grid_config = self.test_config.copy()
+        invalid_grid_config = deepcopy(self.test_config)
         invalid_grid_config["strategy_config"]["grid_upper_price"] = 140
         invalid_grid_config["strategy_config"]["grid_lower_price"] = 160
         result = self.config_manager.validate_config(invalid_grid_config)
@@ -184,7 +185,7 @@ class TestConfigManager(unittest.TestCase):
         self.assertTrue(checksum_path.exists())
         
         # 修改原配置
-        modified_config = self.test_config.copy()
+        modified_config = deepcopy(self.test_config)
         modified_config["metadata"]["name"] = "修改後的配置"
         self.config_manager.save_config(config_path, modified_config)
         

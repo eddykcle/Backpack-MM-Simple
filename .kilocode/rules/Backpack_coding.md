@@ -18,7 +18,7 @@
    * cd /home/eddy/Backpack-MM-Simple && .venv/bin/python3
 
 3. **測試（Testing）**:
-   * 使用 unittesting
+   * 使用 unittest
 
 4.   **參考文檔 (Reference document)**:
     * BACKPACK exchange api document: **`/home/eddy/Backpack-MM-Simple/Reference/Backpack_Exchange_API.json`**

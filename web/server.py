@@ -15,7 +15,7 @@ from datetime import datetime
 
 # 添加輸入驗證模組
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from utils.input_validation import WebApiValidator, ValidationError
+from utils.input_validation import WebApiValidator
 
 # 添加父目錄到路徑以導入項目模組
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -1071,15 +1071,6 @@ def run_server(host='0.0.0.0', port=5000, debug=False):
     logger.info(f"調試模式: {'開啟' if debug else '關閉'}")
     socketio.run(app, host=host, port=port, debug=debug, allow_unsafe_werkzeug=True)
 
-
-@app.errorhandler(ValidationError)
-def handle_validation_error(error):
-    """處理驗證錯誤"""
-    logger.error(f"驗證錯誤: {str(error)}")
-    return jsonify({
-        'success': False,
-        'message': f'驗證錯誤: {str(error)}'
-    }), 400
 
 @app.errorhandler(400)
 def handle_bad_request(error):

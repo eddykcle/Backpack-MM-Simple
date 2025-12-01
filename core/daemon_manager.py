@@ -775,21 +775,22 @@ class TradingBotDaemon:
             stdout_file = open(stdout_log, 'a', buffering=1)  # 行緩衝
             stderr_file = open(stderr_log, 'a', buffering=1)  # 行緩衝
             
-            # 啟動進程，重定向到文件而不是PIPE
-            process = subprocess.Popen(
-                cmd,
-                cwd=self.config["working_dir"],
-                env=env,
-                stdout=stdout_file,
-                stderr=stderr_file,
-                text=True,
-                # 確保進程獨立於父進程，SSH斷開不會影響
-                start_new_session=True
-            )
-            
-            # 關閉文件描述符（子進程已經繼承了副本）
-            stdout_file.close()
-            stderr_file.close()
+            try:
+                # 啟動進程，重定向到文件而不是PIPE
+                process = subprocess.Popen(
+                    cmd,
+                    cwd=self.config["working_dir"],
+                    env=env,
+                    stdout=stdout_file,
+                    stderr=stderr_file,
+                    text=True,
+                    # 確保進程獨立於父進程，SSH斷開不會影響
+                    start_new_session=True
+                )
+            finally:
+                # 關閉文件描述符（子進程已經繼承了副本）
+                stdout_file.close()
+                stderr_file.close()
             
             # 保存進程引用（防止資源泄漏）
             self._bot_process = process

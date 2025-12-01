@@ -6,6 +6,7 @@ import sys
 from config import LOG_FILE
 from pathlib import Path
 from datetime import datetime
+import os
 
 def setup_logger(name="market_maker", log_dir="logs"):
     """
@@ -63,7 +64,6 @@ def setup_logger(name="market_maker", log_dir="logs"):
                     except (AttributeError, OSError):
                         pass
         
-        import os
         file_handler = LineBufferedFileHandler(log_file, encoding='utf-8', delay=False)
         file_handler.setFormatter(formatter)
         

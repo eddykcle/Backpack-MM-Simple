@@ -505,6 +505,9 @@ class ConfigManager:
         if strategy == "grid" or strategy == "perp_grid":
             grid_rules = self.validation_rules["strategy_config"]["validators"]["grid_strategy"]
             
+            # 存儲已驗證的浮點數值，避免重複轉換
+            validated_floats = {}
+            
             # 網格策略特定驗證
             for field, rule in grid_rules.items():
                 if field in strategy_config:
@@ -512,13 +515,14 @@ class ConfigManager:
                     
                     if rule["type"] == "float":
                         try:
-                            value = float(value)
+                            float_value = float(value)
+                            validated_floats[field] = float_value  # 存儲已驗證的值
                         except (ValueError, TypeError):
                             errors.append(f"{field} 必須是數字: {value}")
                             continue
                         
-                        if "min" in rule and value < rule["min"]:
-                            errors.append(f"{field} 不能小於 {rule['min']}: {value}")
+                        if "min" in rule and float_value < rule["min"]:
+                            errors.append(f"{field} 不能小於 {rule['min']}: {float_value}")
                     
                     elif rule["type"] == "int":
                         try:
@@ -536,10 +540,11 @@ class ConfigManager:
                         if value not in rule["enum"]:
                             errors.append(f"無效的 {field}: {value}，有效值: {rule['enum']}")
             
-            # 網格邏輯驗證
-            if "grid_upper_price" in strategy_config and "grid_lower_price" in strategy_config:
-                upper = float(strategy_config["grid_upper_price"])
-                lower = float(strategy_config["grid_lower_price"])
+            # 網格邏輯驗證 - 使用已驗證的值
+            if ("grid_upper_price" in validated_floats and
+                "grid_lower_price" in validated_floats):
+                upper = validated_floats["grid_upper_price"]
+                lower = validated_floats["grid_lower_price"]
                 
                 if upper <= lower:
                     errors.append("grid_upper_price 必須大於 grid_lower_price")

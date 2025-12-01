@@ -29,7 +29,7 @@ perp_market_maker.py:18 → logger = setup_logger("perp_market_maker")
 perp_grid_strategy.py:18 → logger = setup_logger("perp_grid_strategy")
 由于继承关系，父类代码（如 __init__、统计方法）使用父类的 logger 记录。
 
-问题 3: 日志文件命名格式异常 (轻微)
+问题 4: 日志文件命名格式异常 (轻微)
 症状: 文件名变成 perp_grid_strategy.log.2025-11-29
 
 根因: CompressedRotatingFileHandler 的 time_based 模式在已有日期目录的路径上再次追加日期
@@ -43,7 +43,7 @@ perp_grid_strategy.py:18 → logger = setup_logger("perp_grid_strategy")
 # 同时设置 _stop_flag 确保主循环退出
 self._stop_flag = True
 self._stop_trading = True
-修复 2: 日志文件命名
+修复 2: 日志文件命名 (对应问题 4)
 修改 core/log_manager.py 的 CompressedRotatingFileHandler.__init__，移除对已在日期目录中文件的二次日期追加：
 
 if self.time_based:
@@ -52,7 +52,7 @@ if self.time_based:
     if not self._is_date_format(parent_dir):
         self.date_filename = f"{self.baseFilename}.{self.current_date.strftime('%Y-%m-%d')}"
         self.baseFilename = self.date_filename
-修复 3: 日志隔离 (可选优化)
+修复 3: 日志隔离 (对应问题 3，可选优化)
 此为预期行为，父类代码使用父类 logger。如需统一，可：
 
 在子类 __init__ 中传递 logger name 给父类
