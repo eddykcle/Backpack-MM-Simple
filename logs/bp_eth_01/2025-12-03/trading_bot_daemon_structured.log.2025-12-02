@@ -1,0 +1,4 @@
+{"timestamp": "2025-12-03T00:04:15.452416", "level": "INFO", "logger": "trading_bot_daemon", "message": "收到停止信號", "module": "", "function": null, "line": 0, "data": {"signal": 15}}
+{"timestamp": "2025-12-03T00:04:15.455408", "level": "INFO", "logger": "trading_bot_daemon", "message": "正在優雅停止 bot 進程...", "module": "log_manager", "function": "log_structured", "line": 302}
+{"timestamp": "2025-12-03T00:04:15.456027", "level": "INFO", "logger": "trading_bot_daemon", "message": "Bot 進程已停止", "module": "log_manager", "function": "log_structured", "line": 302}
+{"timestamp": "2025-12-03T00:04:21.397921", "level": "INFO", "logger": "trading_bot_daemon", "message": "主循環已停止", "module": "log_manager", "function": "log_structured", "line": 302}

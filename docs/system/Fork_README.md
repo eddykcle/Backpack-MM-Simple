@@ -70,7 +70,7 @@ pip install psutil requests
 sleep 5
 
 .venv/bin/python3 core/daemon_manager.py start --config config/active/bp_sol_01.json --daemon
-.venv/bin/python3 core/daemon_manager.py start --config config/active/bp_eth_02.json --daemon
+.venv/bin/python3 core/daemon_manager.py start --config config/active/bp_eth_01.json --daemon
 
 # 查看狀態
 .venv/bin/python3 core/daemon_manager.py status 
@@ -79,7 +79,7 @@ sleep 5
 .venv/bin/python3 core/daemon_manager.py list
 
 # 停止所有守護進程
-.venv/bin/python3 core/daemon_manager.py stop -
+.venv/bin/python3 core/daemon_manager.py stop
 
 # 重啟守護進程
 .venv/bin/python3 core/daemon_manager.py restart
@@ -89,7 +89,7 @@ sleep 5
 # 停止特定實例
 .venv/bin/python3 core/daemon_manager.py stop --config config/active/backpack_eth_usdc_perp_grid.json --daemon
 .venv/bin/python3 core/daemon_manager.py stop --config config/active/bp_sol_01.json --daemon
-.venv/bin/python3 core/daemon_manager.py stop --config config/active/bp_eth_02.json --daemon
+.venv/bin/python3 core/daemon_manager.py stop --config config/active/bp_eth_01.json --daemon
 
 # 重啟特定實例
 .venv/bin/python3 core/daemon_manager.py restart --config config/active/bp_eth_02.json

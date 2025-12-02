@@ -11,6 +11,7 @@ import signal
 from typing import Optional
 from config import ENABLE_DATABASE, DB_PATH
 from core.logger import setup_logger
+from core.exceptions import InsufficientFundsError
 
 # 創建記錄器
 logger = setup_logger("main")
@@ -539,6 +540,11 @@ def main():
             
         except KeyboardInterrupt:
             logger.info("收到中斷信號，正在退出...")
+        except InsufficientFundsError as e:
+            # 資金不足，立即終止策略
+            logger.error(f"資金不足，策略終止: {e}")
+            logger.error("請確保賬戶有足夠的保證金後再重新啟動策略")
+            sys.exit(1)
         except Exception as e:
             logger.error(f"做市過程中發生錯誤: {e}")
             import traceback

@@ -74,3 +74,27 @@ class DaemonStopError(DaemonError):
 class DaemonConfigError(DaemonError):
     """守護進程配置錯誤"""
     pass
+
+
+class TradingError(Exception):
+    """交易相關錯誤基類"""
+    pass
+
+
+class InsufficientFundsError(TradingError):
+    """資金不足錯誤
+    
+    當賬戶保證金或餘額不足以執行交易策略時拋出此異常。
+    拋出此異常會導致策略立即終止。
+    """
+    def __init__(self, message: str, available: float = None, required: float = None, **kwargs):
+        super().__init__(message)
+        self.available = available
+        self.required = required
+        self.details = kwargs
+    
+    def __str__(self):
+        base_msg = super().__str__()
+        if self.available is not None and self.required is not None:
+            base_msg = f"{base_msg} (可用: {self.available:.4f}, 需要: {self.required:.4f})"
+        return base_msg

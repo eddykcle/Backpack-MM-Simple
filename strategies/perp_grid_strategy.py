@@ -12,6 +12,7 @@ import threading
 from typing import Dict, List, Optional, Tuple, Any, Set, Iterable
 
 from core.logger import setup_logger
+from core.exceptions import InsufficientFundsError
 from strategies.perp_market_maker import PerpetualMarketMaker, format_balance
 from utils.helpers import round_to_precision, round_to_tick_size
 
@@ -809,6 +810,139 @@ class PerpGridStrategy(PerpetualMarketMaker):
                 logger.info("補充處理平倉單成交: ID=%s, 開倉價格=%.4f, 類型=%s", order_id, open_price, position_type)
                 self._handle_close_order_filled(order_id, open_price, side, quantity)
 
+    def _get_available_margin(self) -> float:
+        """獲取可用保證金
+        
+        根據不同交易所的 API 返回格式，統一獲取可用保證金數值。
+        
+        Returns:
+            float: 可用保證金金額，獲取失敗返回 0.0
+        """
+        try:
+            if self.exchange == 'backpack':
+                # Backpack: 從抵押品中獲取報價資產的可用餘額
+                collateral = self.client.get_collateral()
+                if isinstance(collateral, dict) and "error" in collateral:
+                    logger.warning("獲取抵押品失敗: %s", collateral.get('error'))
+                    return 0.0
+                
+                # 查找報價資產 (通常是 USDC)
+                assets = collateral.get('assets') or collateral.get('collateral', [])
+                for item in assets:
+                    symbol = item.get('symbol', '')
+                    if symbol == self.quote_asset:
+                        available = float(item.get('availableQuantity', 0))
+                        total = float(item.get('totalQuantity', 0))
+                        logger.info("Backpack 保證金: %s 可用=%.4f, 總計=%.4f", 
+                                   symbol, available, total)
+                        return available
+                
+                logger.warning("未找到報價資產 %s 的抵押品信息", self.quote_asset)
+                return 0.0
+                
+            elif self.exchange == 'aster':
+                # Aster: 從餘額中獲取
+                balances = self.client.get_balance()
+                if isinstance(balances, dict) and "error" in balances:
+                    logger.warning("獲取餘額失敗: %s", balances.get('error'))
+                    return 0.0
+                
+                for asset, info in balances.items():
+                    if asset == self.quote_asset or asset == 'USDT':
+                        available = float(info.get('available', 0))
+                        logger.info("Aster 保證金: %s 可用=%.4f", asset, available)
+                        return available
+                return 0.0
+                
+            elif self.exchange == 'apex':
+                # APEX: 從餘額中獲取 totalEquityValue
+                balances = self.client.get_balance()
+                if isinstance(balances, dict) and "error" in balances:
+                    logger.warning("獲取餘額失敗: %s", balances.get('error'))
+                    return 0.0
+                
+                for asset, info in balances.items():
+                    if asset in ('USDC', 'USDT'):
+                        available = float(info.get('available', 0))
+                        logger.info("APEX 保證金: %s 可用=%.4f", asset, available)
+                        return available
+                return 0.0
+                
+            elif self.exchange == 'paradex':
+                # Paradex: 從抵押品中獲取 free_collateral
+                collateral = self.client.get_collateral()
+                if isinstance(collateral, dict) and "error" in collateral:
+                    logger.warning("獲取抵押品失敗: %s", collateral.get('error'))
+                    return 0.0
+                
+                free_collateral = float(collateral.get('free_collateral', 0))
+                logger.info("Paradex 保證金: 可用=%.4f", free_collateral)
+                return free_collateral
+                
+            elif self.exchange == 'lighter':
+                # Lighter: 從餘額中獲取
+                balances = self.client.get_balance()
+                if isinstance(balances, dict) and "error" in balances:
+                    logger.warning("獲取餘額失敗: %s", balances.get('error'))
+                    return 0.0
+                
+                for asset, info in balances.items():
+                    if asset in ('USDC', 'USDT', self.quote_asset):
+                        available = float(info.get('available', 0))
+                        logger.info("Lighter 保證金: %s 可用=%.4f", asset, available)
+                        return available
+                return 0.0
+            else:
+                logger.warning("未知交易所 %s，無法獲取保證金", self.exchange)
+                return 0.0
+                
+        except Exception as e:
+            logger.error("獲取可用保證金時發生錯誤: %s", e)
+            return 0.0
+
+    def _validate_sufficient_margin(self, current_price: float) -> None:
+        """驗證保證金是否足夠啟動網格策略
+        
+        計算公式：所需保證金 = (max_position * current_price) / leverage * 1.1
+        其中 1.1 為 10% 的安全緩衝
+        
+        Args:
+            current_price: 當前市場價格
+            
+        Raises:
+            InsufficientFundsError: 當保證金不足時拋出
+        """
+        # 計算所需保證金
+        notional_value = self.max_position * current_price
+        required_margin = notional_value / self.leverage
+        required_margin *= 1.1  # 預留 10% 緩衝
+        
+        # 獲取可用保證金
+        available_margin = self._get_available_margin()
+        
+        logger.info(
+            "保證金檢查: 可用=%.4f %s, 需要=%.4f %s (max_position=%.4f, price=%.4f, leverage=%.1fx)",
+            available_margin, self.quote_asset,
+            required_margin, self.quote_asset,
+            self.max_position, current_price, self.leverage
+        )
+        
+        if available_margin < required_margin:
+            error_msg = (
+                f"保證金不足，無法啟動網格策略: "
+                f"可用 {available_margin:.4f} {self.quote_asset}, "
+                f"需要 {required_margin:.4f} {self.quote_asset} "
+                f"(max_position={self.max_position}, price={current_price:.4f}, leverage={self.leverage}x)"
+            )
+            logger.error(error_msg)
+            raise InsufficientFundsError(
+                error_msg,
+                available=available_margin,
+                required=required_margin
+            )
+        
+        logger.info("保證金檢查通過: 可用 %.4f >= 需要 %.4f", available_margin, required_margin)
+
     def _initialize_grid_prices(self) -> bool:
         """初始化網格價格點位"""
         # 強制使用REST API獲取準確的初始價格
@@ -898,6 +1032,10 @@ class PerpGridStrategy(PerpetualMarketMaker):
         if not current_price:
             logger.error("無法獲取當前價格")
             return False
+
+        # 資金檢查：驗證保證金是否足夠
+        # 如果不足會拋出 InsufficientFundsError 異常，終止策略
+        self._validate_sufficient_margin(current_price)
 
         # 取消現有訂單
         logger.info("取消現有訂單...")
